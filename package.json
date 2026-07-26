@@ -55,19 +55,19 @@
     "@types/node": "^26.1.1",
     "@typescript/native-preview": "7.0.0-dev.20260707.2",
     "@vue/eslint-config-typescript": "^14.9.0",
-    "bumpp": "^11.1.0",
-    "eslint": "^10.7.0",
+    "bumpp": "^12.0.0",
+    "eslint": "^10.8.0",
     "eslint-config-prettier": "^10.1.8",
-    "eslint-plugin-oxlint": "^1.73.0",
-    "eslint-plugin-vue": "^10.9.2",
-    "lint-staged": "^17.0.8",
+    "eslint-plugin-oxlint": "^1.75.0",
+    "eslint-plugin-vue": "^10.10.0",
+    "lint-staged": "^17.2.0",
     "npm-run-all2": "^9.0.2",
-    "oxfmt": "^0.59.0",
-    "oxlint": "^1.74.0",
+    "oxfmt": "^0.60.0",
+    "oxlint": "^1.75.0",
     "simple-git-hooks": "^2.13.1",
-    "tsdown": "^0.22.8",
+    "tsdown": "^0.22.14",
     "typescript": "^6.0.3",
     "vitest": "^4.1.10"
   },
-  "packageManager": "pnpm@11.15.1+sha512.81350b07e53c9538a02f1f2303b4290fa2d7be04e56e2a970c4cc4b417dc761de196edabd49d55c7dc9580db81007c44143e4e3d7e462b3000d23c255122d065"
+  "packageManager": "pnpm@11.17.0+sha512.cca3cea332ad254bb84145f966d19f4879615210346fc92c79a047f23a0d7b3cca3c3792f0076ba1f1831d277efbcf0a9119b31a9a60eca7fb3d6231f331ef72"
 }
