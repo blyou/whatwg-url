@@ -1,5 +1,5 @@
 /**
- * web.ts — WHATWG URL / URLSearchParams polyfill
+ * WHATWG URL / URLSearchParams polyfill
  *
  * 设计目标：
  *  - 零 DOM / 零全局环境依赖（不引用 globalThis / window / self / document / location），
