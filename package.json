@@ -1,6 +1,6 @@
 {
   "name": "@blyou/whatwg-url",
-  "version": "0.0.0",
+  "version": "0.0.1",
   "description": "A tiny, zero-dependency WHATWG URL and URLSearchParams implementation for constrained environments.",
   "keywords": [
     "url",
