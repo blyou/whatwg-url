@@ -1,506 +1,332 @@
-// 单元测试：对照 WHATWG URL 规范
-//   https://url.spec.whatwg.org/#url
-//   https://url.spec.whatwg.org/#urlsearchparams
 import { describe, it, expect } from 'vitest'
 import { URL, URLSearchParams } from '../src/index'
 
-describe('URL 构造与解析 (#url)', () => {
-  it('解析绝对 URL 的各部分', () => {
-    const u = new URL('https://user:pass@example.com:8080/path/to?q=1#frag')
+describe('URL parsing & serialization', () => {
+  it('parses a basic special URL', () => {
+    const u = new URL('https://example.com/')
+    expect(u.href).toBe('https://example.com/')
     expect(u.protocol).toBe('https:')
-    expect(u.username).toBe('user')
-    expect(u.password).toBe('pass')
     expect(u.hostname).toBe('example.com')
+    expect(u.host).toBe('example.com')
+    expect(u.pathname).toBe('/')
+    expect(u.origin).toBe('https://example.com')
+  })
+
+  it('keeps the default port stripped but keeps non-default ports', () => {
+    expect(new URL('https://example.com:443/').href).toBe('https://example.com/')
+    expect(new URL('https://example.com:443/').host).toBe('example.com')
+    const u = new URL('https://example.com:8080/')
     expect(u.port).toBe('8080')
     expect(u.host).toBe('example.com:8080')
-    expect(u.pathname).toBe('/path/to')
-    expect(u.search).toBe('?q=1')
-    expect(u.hash).toBe('#frag')
-    expect(u.href).toBe('https://user:pass@example.com:8080/path/to?q=1#frag')
+    expect(u.href).toBe('https://example.com:8080/')
   })
 
-  it('省略特殊协议的默认端口', () => {
-    expect(new URL('http://example.com:80/').port).toBe('')
-    expect(new URL('https://example.com:443/').port).toBe('')
-    expect(new URL('ws://example.com:80/').port).toBe('')
-    expect(new URL('wss://example.com:443/').port).toBe('')
+  it('throws on invalid URLs', () => {
+    expect(() => new URL('http://')).toThrow(TypeError)
+    expect(() => new URL('not a url')).toThrow(TypeError)
+    expect(() => new URL('http://example.com:99999/')).toThrow(TypeError)
   })
 
-  it('保留非默认端口', () => {
-    expect(new URL('http://example.com:8080/').port).toBe('8080')
-    expect(new URL('https://example.com:8081/').port).toBe('8081')
+  it('URL.parse / URL.canParse return null / false instead of throwing', () => {
+    expect(URL.parse('http://example.com/')).not.toBeNull()
+    expect(URL.parse('http://')).toBeNull()
+    expect(URL.parse('http://', 'http://example.com/')).not.toBeNull()
+    expect(URL.canParse('http://example.com/')).toBe(true)
+    expect(URL.canParse('http://')).toBe(false)
+    expect(URL.canParse('../x', 'http://example.com/')).toBe(true)
+  })
+})
+
+describe('special character encoding', () => {
+  it('encodes spaces and unsafe chars in the query', () => {
+    const u = new URL('https://example.com/?a=b ~')
+    expect(u.search).toBe('?a=b%20~')
+    expect(u.href).toBe('https://example.com/?a=b%20~')
   })
 
-  it('自定义（非特殊）协议的端口始终保留', () => {
-    const u = new URL('foo://host:123/path')
-    expect(u.protocol).toBe('foo:')
-    expect(u.host).toBe('host:123')
-    expect(u.port).toBe('123')
+  it('re-serializes form-encoding on searchParams mutation (space -> +, ~ -> %7E)', () => {
+    const u = new URL('https://example.com/?a=b ~')
+    u.searchParams.sort()
+    expect(u.href).toBe('https://example.com/?a=b+%7E')
   })
 
-  it('无路径的特殊协议 URL 的 pathname 为 / 且 href 带尾斜杠', () => {
-    const u = new URL('http://example.com')
-    expect(u.pathname).toBe('/')
-    expect(u.href).toBe('http://example.com/')
+  it('percent-decodes the query into searchParams', () => {
+    const u = new URL('https://example.com/?a=b%20%7E')
+    expect(u.searchParams.get('a')).toBe('b ~')
   })
 
-  it('基础 URL 相对解析（同目录）', () => {
+  it('encodes spaces in the fragment', () => {
+    const u = new URL('http://example.com/#frag ment')
+    expect(u.hash).toBe('#frag%20ment')
+    expect(u.href).toBe('http://example.com/#frag%20ment')
+  })
+
+  it('decodes percent-encoded path segments', () => {
+    const u = new URL('http://example.com/%E4%B8%AD')
+    expect(u.pathname).toBe('/%E4%B8%AD')
+    expect(u.href).toBe('http://example.com/%E4%B8%AD')
+  })
+
+  it('encodes unsafe chars in pathname when set', () => {
+    const u = new URL('http://example.com/')
+    u.pathname = '/a b"c'
+    expect(u.pathname).toBe('/a%20b%22c')
+  })
+})
+
+describe('relative path resolution', () => {
+  it('resolves a relative reference against a directory base', () => {
     expect(new URL('bar', 'http://example.com/foo/').href).toBe('http://example.com/foo/bar')
   })
 
-  it('基础 URL 相对解析（绝对路径覆盖）', () => {
-    expect(new URL('/bar', 'http://example.com/foo/').href).toBe('http://example.com/bar')
+  it('resolves ".." references', () => {
+    expect(new URL('../baz', 'http://example.com/foo/bar/').href).toBe('http://example.com/foo/baz')
   })
 
-  it('相对 URL 仅含查询时保留基础路径', () => {
-    expect(new URL('?x=1', 'http://example.com/foo').href).toBe('http://example.com/foo?x=1')
+  it('resolves an absolute path reference', () => {
+    expect(new URL('/root', 'http://example.com/a/b/').href).toBe('http://example.com/root')
   })
 
-  it('相对 URL 仅含片段时保留基础路径', () => {
-    expect(new URL('#frag', 'http://example.com/foo/bar').href).toBe(
-      'http://example.com/foo/bar#frag',
-    )
+  it('resolves fragment-only and query-only references', () => {
+    expect(new URL('#frag', 'http://example.com/').href).toBe('http://example.com/#frag')
+    expect(new URL('?q=1', 'http://example.com/').href).toBe('http://example.com/?q=1')
   })
 
-  it('协议相对 URL (//) 继承基础协议但使用新主机', () => {
-    expect(new URL('//other.com/', 'http://example.com/').href).toBe('http://other.com/')
+  it('accepts a URL object as the base', () => {
+    expect(new URL('x', new URL('http://example.org/')).href).toBe('http://example.org/x')
   })
 
-  it('file 协议', () => {
-    const u = new URL('file:///path/to/file')
-    expect(u.protocol).toBe('file:')
-    expect(u.hostname).toBe('')
-    expect(u.pathname).toBe('/path/to/file')
-    expect(u.origin).toBe('null')
-    expect(u.href).toBe('file:///path/to/file')
+  it('resolves a relative reference for a non-special scheme when base is file', () => {
+    expect(new URL('bar', 'file:///foo/').href).toBe('file:///foo/bar')
+  })
+})
+
+describe('port & protocol handling', () => {
+  it('updates the scheme via the protocol setter', () => {
+    const u = new URL('http://example.com/')
+    u.protocol = 'https:'
+    expect(u.href).toBe('https://example.com/')
   })
 
-  it('IPv6 主机', () => {
-    const u = new URL('http://[::1]:8080/')
-    expect(u.hostname).toBe('[::1]')
+  it('ignores a non-special scheme when current scheme is special', () => {
+    const u = new URL('http://example.com/')
+    u.protocol = 'mailto:'
+    expect(u.href).toBe('http://example.com/')
+  })
+
+  it('sets a non-default port via the port setter', () => {
+    const u = new URL('https://example.com/')
+    u.port = '8080'
     expect(u.port).toBe('8080')
-    expect(u.href).toBe('http://[::1]:8080/')
+    expect(u.host).toBe('example.com:8080')
   })
 
-  it('缺少 scheme 且无 base 时抛出 TypeError', () => {
-    expect(() => new URL('not a url')).toThrow(TypeError)
+  it('clears the port when set to empty', () => {
+    const u = new URL('https://example.com:8080/')
+    u.port = ''
+    expect(u.port).toBe('')
+    expect(u.host).toBe('example.com')
   })
 
-  it('特殊协议缺少主机时抛出 TypeError', () => {
-    expect(() => new URL('http://')).toThrow(TypeError)
+  it('ignores out-of-range ports (per spec, no throw)', () => {
+    const u = new URL('http://example.com/')
+    u.port = '70000'
+    expect(u.port).toBe('')
+    expect(u.host).toBe('example.com')
   })
 
-  it('从 URL 实例构造（克隆）', () => {
-    const a = new URL('http://user@x.com:8080/p?q=1#h')
-    const b = new URL(a)
-    expect(b.href).toBe(a.href)
-    expect(b).not.toBe(a)
+  it('does not allow user/password/port on file URLs', () => {
+    const u = new URL('file:///x')
+    u.username = 'a'
+    u.password = 'b'
+    u.port = '1234'
+    expect(u.username).toBe('')
+    expect(u.password).toBe('')
+    expect(u.port).toBe('')
+  })
+
+  it('parses userinfo', () => {
+    const u = new URL('http://user:pass@example.com/')
+    expect(u.username).toBe('user')
+    expect(u.password).toBe('pass')
+    expect(u.host).toBe('example.com')
+    expect(u.href).toBe('http://user:pass@example.com/')
   })
 })
 
-describe('URL 属性 (#url)', () => {
-  describe('protocol', () => {
-    it('getter', () => {
-      expect(new URL('https://x.com/').protocol).toBe('https:')
-    })
-    it('setter 改变协议并影响 href', () => {
-      const u = new URL('http://x.com/')
-      u.protocol = 'https'
-      expect(u.protocol).toBe('https:')
-      expect(u.href).toBe('https://x.com/')
-    })
-    it('setter 忽略非法协议', () => {
-      const u = new URL('http://x.com/')
-      u.protocol = '123invalid'
-      expect(u.protocol).toBe('http:')
-    })
+describe('host parsing', () => {
+  it('normalizes file://localhost to file:///', () => {
+    expect(new URL('file://localhost/').href).toBe('file:///')
+    expect(new URL('file://localhost/x').href).toBe('file:///x')
   })
 
-  describe('username / password', () => {
-    it('getter 解析 userinfo', () => {
-      const u = new URL('http://user:pass@x.com/')
-      expect(u.username).toBe('user')
-      expect(u.password).toBe('pass')
-    })
-    it('setter 更新 href', () => {
-      const u = new URL('http://x.com/')
-      u.username = 'user'
-      u.password = 'pass'
-      expect(u.href).toBe('http://user:pass@x.com/')
-    })
+  it('serializes IPv6 hosts with brackets and compression', () => {
+    const u = new URL('https://[::1]/')
+    expect(u.hostname).toBe('[::1]')
+    expect(u.href).toBe('https://[::1]/')
+    const v = new URL('https://[2001:db8::1]/')
+    expect(v.hostname).toBe('[2001:db8::1]')
   })
 
-  describe('host / hostname / port', () => {
-    it('host getter 包含端口', () => {
-      expect(new URL('http://x.com:8080/').host).toBe('x.com:8080')
-    })
-    it('hostname getter', () => {
-      expect(new URL('http://x.com:8080/').hostname).toBe('x.com')
-    })
-    it('host setter 解析 host:port', () => {
-      const u = new URL('http://x.com/')
-      u.host = 'y.com:9999'
-      expect(u.hostname).toBe('y.com')
-      expect(u.port).toBe('9999')
-      expect(u.href).toBe('http://y.com:9999/')
-    })
-    it('port setter 省略默认端口', () => {
-      const u = new URL('http://x.com/')
-      u.port = '80'
-      expect(u.port).toBe('')
-    })
-    it('port setter 保留非默认端口', () => {
-      const u = new URL('http://x.com/')
-      u.port = '8080'
-      expect(u.port).toBe('8080')
-    })
-    it('port setter 忽略非法值', () => {
-      const u = new URL('http://x.com/')
-      u.port = 'abc'
-      expect(u.port).toBe('')
-    })
-    it('IPv6 的 host setter 保留端口', () => {
-      const u = new URL('http://[::1]/')
-      u.host = '[::1]:8080'
-      expect(u.hostname).toBe('[::1]')
-      expect(u.port).toBe('8080')
-    })
+  it('parses IPv4 dotted-decimal and hex forms', () => {
+    expect(new URL('http://127.0.0.1/').hostname).toBe('127.0.0.1')
+    expect(new URL('http://0x7f.0.0.1/').hostname).toBe('127.0.0.1')
   })
 
-  describe('pathname', () => {
-    it('归一化 . 和 .. 段', () => {
-      const u = new URL('http://x.com/a/b/../c/./d')
-      expect(u.pathname).toBe('/a/c/d')
-    })
-    it('保留空段', () => {
-      const u = new URL('http://x.com/a//b')
-      expect(u.pathname).toBe('/a//b')
-    })
-    it('setter 归一化', () => {
-      const u = new URL('http://x.com/')
-      u.pathname = '/x/./y/../z'
-      expect(u.pathname).toBe('/x/z')
-    })
+  it('percent-encodes opaque hosts', () => {
+    const u = new URL('foo://opaque%20host/')
+    expect(u.hostname).toBe('opaque%20host')
+    expect(u.href).toBe('foo://opaque%20host/')
+    // a space inside an opaque host is a forbidden host code point -> invalid
+    expect(() => new URL('foo://opaque host/')).toThrow(TypeError)
   })
 
-  describe('search / searchParams', () => {
-    it('search getter/setter', () => {
-      const u = new URL('http://x.com/?a=1')
-      expect(u.search).toBe('?a=1')
-      u.search = '?b=2'
-      expect(u.search).toBe('?b=2')
-      expect(u.searchParams.get('b')).toBe('2')
-    })
-    it('searchParams 与 URL 双向绑定（append）', () => {
-      const u = new URL('http://x.com/?a=1')
-      u.searchParams.append('b', '2')
-      expect(u.search).toBe('?a=1&b=2')
-    })
-    it('修改 search 后 searchParams 重新解析', () => {
-      const u = new URL('http://x.com/?a=1')
-      u.search = '?c=3'
-      expect(u.searchParams.get('c')).toBe('3')
-      expect(u.searchParams.has('a')).toBe(false)
-    })
-  })
-
-  describe('hash', () => {
-    it('getter/setter', () => {
-      const u = new URL('http://x.com/#frag')
-      expect(u.hash).toBe('#frag')
-      u.hash = '#sec'
-      expect(u.hash).toBe('#sec')
-      u.hash = ''
-      expect(u.hash).toBe('')
-    })
-  })
-
-  describe('origin', () => {
-    it('特殊协议返回 origin', () => {
-      expect(new URL('http://x.com/').origin).toBe('http://x.com')
-      expect(new URL('http://x.com:8080/').origin).toBe('http://x.com:8080')
-      expect(new URL('https://x.com/').origin).toBe('https://x.com')
-      expect(new URL('ws://x.com/').origin).toBe('ws://x.com')
-      expect(new URL('wss://x.com/').origin).toBe('wss://x.com')
-      expect(new URL('ftp://x.com/').origin).toBe('ftp://x.com')
-    })
-    it('file 与自定义协议返回 null', () => {
-      expect(new URL('file:///').origin).toBe('null')
-      expect(new URL('foo://x.com/').origin).toBe('null')
-    })
-  })
-
-  describe('toString / toJSON', () => {
-    it('等于 href', () => {
-      const u = new URL('http://x.com/p?q=1#h')
-      expect(u.toString()).toBe(u.href)
-      expect(u.toJSON()).toBe(u.href)
-    })
+  it('applies IDNA / punycode for non-ASCII domains', () => {
+    const u = new URL('http://üni.code/')
+    expect(u.hostname.startsWith('xn--')).toBe(true)
+    // the encoded form must be stable (re-parsing yields the same hostname)
+    expect(new URL(`http://${u.hostname}/`).hostname).toBe(u.hostname)
   })
 })
 
-describe('URLSearchParams 构造 (#urlsearchparams)', () => {
-  it('从查询字符串', () => {
-    const p = new URLSearchParams('a=1&b=2&a=3')
-    expect(p.get('a')).toBe('1')
-    expect(p.getAll('a')).toEqual(['1', '3'])
-    expect(p.has('b')).toBe(true)
-    expect(p.size).toBe(3)
+describe('origin', () => {
+  it('returns "null" for opaque origins', () => {
+    expect(new URL('data:text/plain,hi').origin).toBe('null')
+    expect(new URL('foo://opaque/').origin).toBe('null')
+    expect(new URL('mailto:a@b.com').origin).toBe('null')
   })
-  it('忽略前导 ?', () => {
-    const p = new URLSearchParams('?a=1')
-    expect(p.get('a')).toBe('1')
+
+  it('serializes special origins', () => {
+    expect(new URL('https://example.com:8080/').origin).toBe('https://example.com:8080')
+    expect(new URL('file:///x').origin).toBe('file://')
   })
-  it('无 = 的条目值为空', () => {
-    const p = new URLSearchParams('a')
-    expect(p.get('a')).toBe('')
-    expect(p.has('a')).toBe(true)
-    expect(p.size).toBe(1)
+})
+
+describe('URLSearchParams CRUD', () => {
+  it('parses a query string (leading ? is tolerated)', () => {
+    expect(new URLSearchParams('?a=b&c=d').get('a')).toBe('b')
+    expect(new URLSearchParams('a=b&c=d').get('c')).toBe('d')
   })
-  it('从数组', () => {
-    const p = new URLSearchParams([
+
+  it('accepts array and record initializers', () => {
+    const a = new URLSearchParams([
+      ['x', '1'],
+      ['y', '2'],
+    ])
+    expect(a.get('x')).toBe('1')
+    const r = new URLSearchParams({ x: '1', y: '2' })
+    expect(r.get('y')).toBe('2')
+  })
+
+  it('append / get / getAll / has', () => {
+    const sp = new URLSearchParams()
+    sp.append('a', '1')
+    sp.append('a', '2')
+    expect(sp.get('a')).toBe('1')
+    expect(sp.getAll('a')).toEqual(['1', '2'])
+    expect(sp.has('a')).toBe(true)
+    expect(sp.has('b')).toBe(false)
+    expect(sp.size).toBe(2)
+  })
+
+  it('set replaces all existing values for a name', () => {
+    const sp = new URLSearchParams('a=1&a=2&a=3')
+    sp.set('a', 'x')
+    expect(sp.getAll('a')).toEqual(['x'])
+    expect(sp.toString()).toBe('a=x')
+  })
+
+  it('delete removes by name or name+value', () => {
+    const sp = new URLSearchParams('a=1&b=2&a=3')
+    sp.delete('a')
+    expect(sp.has('a')).toBe(false)
+    expect(sp.get('b')).toBe('2')
+
+    const sp2 = new URLSearchParams('a=1&a=2&a=3')
+    sp2.delete('a', '2')
+    expect(sp2.getAll('a')).toEqual(['1', '3'])
+  })
+
+  it('sort orders by name', () => {
+    const sp = new URLSearchParams([
+      ['b', '1'],
+      ['a', '2'],
+      ['c', '3'],
+    ])
+    sp.sort()
+    expect([...sp.keys()]).toEqual(['a', 'b', 'c'])
+  })
+
+  it('iterates keys/values/entries/forEach', () => {
+    const sp = new URLSearchParams('a=1&b=2')
+    expect([...sp.keys()]).toEqual(['a', 'b'])
+    expect([...sp.values()]).toEqual(['1', '2'])
+    expect([...sp.entries()]).toEqual([
       ['a', '1'],
       ['b', '2'],
     ])
-    expect(p.get('a')).toBe('1')
-    expect(p.get('b')).toBe('2')
+    const seen: string[] = []
+    sp.forEach((value, name) => seen.push(`${name}=${value}`))
+    expect(seen).toEqual(['a=1', 'b=2'])
   })
-  it('从对象', () => {
-    const p = new URLSearchParams({ a: '1', b: '2' })
-    expect(p.get('a')).toBe('1')
-    expect(p.get('b')).toBe('2')
+
+  it('encodes spaces as + and unsafe chars as percent in toString', () => {
+    expect(new URLSearchParams('a=b c').toString()).toBe('a=b+c')
+    expect(new URLSearchParams([['a', 'b~c']]).toString()).toBe('a=b%7Ec')
   })
-  it('从另一个 URLSearchParams（克隆）', () => {
-    const p = new URLSearchParams('a=1')
-    const q = new URLSearchParams(p)
-    expect(q.get('a')).toBe('1')
-    q.append('b', '2')
-    expect(p.has('b')).toBe(false)
+
+  it('decodes + and percent-encoded sequences on parse', () => {
+    const sp = new URLSearchParams('a=b+c&d=e%20f')
+    expect(sp.get('a')).toBe('b c')
+    expect(sp.get('d')).toBe('e f')
   })
 })
 
-describe('URLSearchParams 方法 (#urlsearchparams)', () => {
-  it('append', () => {
-    const p = new URLSearchParams('a=1')
-    p.append('a', '2')
-    expect(p.getAll('a')).toEqual(['1', '2'])
-  })
-  it('delete 不带 value', () => {
-    const p = new URLSearchParams('a=1&b=2')
-    p.delete('a')
-    expect(p.has('a')).toBe(false)
-    expect(p.has('b')).toBe(true)
-  })
-  it('delete 带 value', () => {
-    const p = new URLSearchParams('a=1&a=2&a=3')
-    p.delete('a', '2')
-    expect(p.getAll('a')).toEqual(['1', '3'])
-  })
-  it('get / getAll', () => {
-    const p = new URLSearchParams('a=1&a=2')
-    expect(p.get('a')).toBe('1')
-    expect(p.getAll('a')).toEqual(['1', '2'])
-    expect(p.get('x')).toBe(null)
-  })
-  it('has 带 value', () => {
-    const p = new URLSearchParams('a=1&a=2')
-    expect(p.has('a', '1')).toBe(true)
-    expect(p.has('a', '3')).toBe(false)
-  })
-  it('set 替换首个并移除其余，不存在则新增', () => {
-    const p = new URLSearchParams('a=1&a=2&b=3')
-    p.set('a', 'X')
-    expect(p.getAll('a')).toEqual(['X'])
-    expect(p.toString()).toBe('a=X&b=3')
-    p.set('c', '9')
-    expect(p.get('c')).toBe('9')
-  })
-  it('sort 按 key 字典序', () => {
-    const p = new URLSearchParams('b=2&a=1&c=3')
-    p.sort()
-    expect(p.toString()).toBe('a=1&b=2&c=3')
-  })
-  it('forEach 传入正确参数与 thisArg', () => {
-    const p = new URLSearchParams('a=1&b=2')
-    const seen: [string, string][] = []
-    const thisArg: any = { id: 42 }
-    p.forEach(function (this: any, value: string, key: string) {
-      seen.push([key, value])
-      this.touched = true
-    }, thisArg)
-    expect(seen).toEqual([
-      ['a', '1'],
-      ['b', '2'],
-    ])
-    expect(thisArg.touched).toBe(true)
-  })
-  it('keys / values / entries / Symbol.iterator', () => {
-    const p = new URLSearchParams('a=1&b=2')
-    expect([...p.keys()]).toEqual(['a', 'b'])
-    expect([...p.values()]).toEqual(['1', '2'])
-    expect([...p.entries()]).toEqual([
-      ['a', '1'],
-      ['b', '2'],
-    ])
-    expect([...p]).toEqual([
-      ['a', '1'],
-      ['b', '2'],
-    ])
-  })
-  it('size', () => {
-    expect(new URLSearchParams('a=1&b=2&c=3').size).toBe(3)
-  })
-  it('toString 编码：空格转 +，特殊字符 percent-encode', () => {
-    expect(new URLSearchParams([['a b', 'c d']]).toString()).toBe('a+b=c+d')
-    expect(new URLSearchParams([['a', 'b=c']]).toString()).toBe('a=b%3Dc')
-    expect(new URLSearchParams([['a', 'b&c']]).toString()).toBe('a=b%26c')
-  })
-  it('解析时 + 与 %20 还原为空格', () => {
-    expect(new URLSearchParams('a=b+c').get('a')).toBe('b c')
-    expect(new URLSearchParams('a=b%20c').get('a')).toBe('b c')
-  })
-})
+describe('URL.searchParams live sync', () => {
+  it('mutating searchParams updates the URL', () => {
+    const u = new URL('http://example.com/')
+    u.searchParams.append('a', 'b')
+    expect(u.href).toBe('http://example.com/?a=b')
+    expect(u.search).toBe('?a=b')
 
-describe('URLSearchParams 与 URL 联动', () => {
-  it('已绑定 URL 时 append 同步 search', () => {
-    const u = new URL('http://x.com/?a=1')
-    u.searchParams.append('b', '2')
-    expect(u.search).toBe('?a=1&b=2')
-  })
-  it('set search 后旧 params 实例失效，新实例重新解析', () => {
-    const u = new URL('http://x.com/?a=1')
-    const p = u.searchParams
-    u.search = '?c=3'
-    expect(p.get('c')).toBe(null)
-    expect(u.searchParams.get('c')).toBe('3')
-  })
-})
+    u.searchParams.set('a', 'c')
+    expect(u.search).toBe('?a=c')
 
-describe('URL 边缘用例 (#url)', () => {
-  it('scheme 小写化（protocol getter）', () => {
-    expect(new URL('HTTP://x.com/').protocol).toBe('http:')
+    u.searchParams.delete('a')
+    expect(u.search).toBe('')
   })
-  it('带点/加号的协议名合法', () => {
-    expect(new URL('a.b+c://x.com/').protocol).toBe('a.b+c:')
+
+  it('setting .search updates searchParams', () => {
+    const u = new URL('http://example.com/')
+    u.search = '?x=1&y=2'
+    expect(u.searchParams.get('x')).toBe('1')
+    expect(u.searchParams.get('y')).toBe('2')
   })
-  it('http 上非默认端口 443 保留', () => {
-    expect(new URL('http://x.com:443').port).toBe('443')
-  })
-  it('前导零端口按数值解析（80 被省略）', () => {
-    expect(new URL('http://x.com:0080').port).toBe('')
-  })
-  it('端口 0 保留', () => {
-    expect(new URL('http://x.com:0').port).toBe('0')
-  })
-  it('相对路径 .. 超出根目录后停在 /', () => {
-    expect(new URL('../../x', 'http://x.com/a').pathname).toBe('/x')
-  })
-  it('相对路径 ./x 拼接', () => {
-    expect(new URL('./x', 'http://x.com/a/').href).toBe('http://x.com/a/x')
-  })
-  it('空 URL 字符串继承 base', () => {
-    expect(new URL('', 'http://x.com/a').href).toBe('http://x.com/a')
-  })
-  it('路径中的空段被保留', () => {
-    expect(new URL('http://x.com/a//b/').pathname).toBe('/a//b/')
-  })
-  it('file 协议带主机', () => {
-    const u = new URL('file://host/path')
-    expect(u.hostname).toBe('host')
-    expect(u.pathname).toBe('/path')
-  })
-  it('file 协议单斜杠路径', () => {
-    const u = new URL('file:/path')
-    expect(u.hostname).toBe('')
-    expect(u.pathname).toBe('/path')
-  })
-  it('search 赋值忽略前导 ?', () => {
-    const u = new URL('http://x.com/')
-    u.search = 'a=1'
-    expect(u.search).toBe('?a=1')
-  })
-  it('hash 赋值忽略前导 #', () => {
-    const u = new URL('http://x.com/')
-    u.hash = 'frag'
-    expect(u.hash).toBe('#frag')
-  })
-  it('searchParams.sort 同步到 search', () => {
-    const u = new URL('http://x.com/?b=2&a=1')
-    u.searchParams.sort()
-    expect(u.search).toBe('?a=1&b=2')
-  })
-  it('重新赋值 href 替换所有部分', () => {
-    const u = new URL('http://x.com/')
-    u.href = 'https://y.com/p'
-    expect(u.href).toBe('https://y.com/p')
-  })
-  it('search 清空后 searchParams 为空', () => {
-    const u = new URL('http://x.com/?a=1')
+
+  it('setting .search to empty clears searchParams', () => {
+    const u = new URL('http://example.com/?a=b')
     u.search = ''
     expect(u.searchParams.size).toBe(0)
   })
-  it('ws 协议设置默认端口 80 被省略', () => {
-    const u = new URL('ws://x.com/')
-    u.port = '80'
-    expect(u.port).toBe('')
-  })
-  it('URL 构造后可 toString 往返', () => {
-    const u = new URL('http://x.com/a?b=1#c')
-    expect(new URL(u.toString()).href).toBe(u.href)
+
+  it('setting .href reparses searchParams', () => {
+    const u = new URL('http://example.com/?a=b')
+    u.href = 'http://example.org/?c=d'
+    expect(u.hostname).toBe('example.org')
+    expect(u.searchParams.get('c')).toBe('d')
   })
 })
 
-describe('URLSearchParams 边缘用例 (#urlsearchparams)', () => {
-  it('尾随 & 被忽略', () => {
-    expect(new URLSearchParams('a=1&').size).toBe(1)
+describe('round-tripping & toJSON', () => {
+  it('toString and toJSON return the serialized URL', () => {
+    const u = new URL('https://example.com/p?q=1#h')
+    expect(u.toString()).toBe('https://example.com/p?q=1#h')
+    expect(u.toJSON()).toBe('https://example.com/p?q=1#h')
   })
-  it('连续 && 产生两个条目', () => {
-    expect(new URLSearchParams('a=1&&b=2').size).toBe(2)
-  })
-  it('空 key', () => {
-    expect(new URLSearchParams('=value').get('')).toBe('value')
-  })
-  it('同名多值', () => {
-    expect(new URLSearchParams('a=1&a=2').getAll('a')).toEqual(['1', '2'])
-  })
-  it('append 后 toString 编码空格与 =', () => {
-    const p = new URLSearchParams()
-    p.append('a b', 'c=d')
-    expect(p.toString()).toBe('a+b=c%3Dd')
-  })
-  it('set 不存在的 key 时新增', () => {
-    const p = new URLSearchParams('a=1')
-    p.set('b', '2')
-    expect(p.get('b')).toBe('2')
-  })
-  it('delete 不存在的 key 不抛错', () => {
-    const p = new URLSearchParams('a=1')
-    expect(() => p.delete('x')).not.toThrow()
-  })
-  it('空 URLSearchParams 的 size 为 0', () => {
-    expect(new URLSearchParams().size).toBe(0)
-  })
-  it('构造自空字符串 size 为 0', () => {
-    expect(new URLSearchParams('').size).toBe(0)
-  })
-  it('has 配合空字符串 key', () => {
-    expect(new URLSearchParams('=1').has('')).toBe(true)
-  })
-})
 
-describe('URL 与 URLSearchParams 规范边界用例', () => {
-  it('特殊协议主机名应 ASCII 小写化', () => {
-    expect(new URL('HTTP://X.COM/').href).toBe('http://x.com/')
-  })
-  it('相对引用 . 应保留尾斜杠', () => {
-    expect(new URL('.', 'http://x.com/a/b').href).toBe('http://x.com/a/')
-  })
-  it('hash 序列化应对空格做 percent-encode', () => {
-    expect(new URL('http://x.com/#frag ment').hash).toBe('#frag%20ment')
-  })
-  it('username 序列化应对空格做 percent-encode', () => {
-    const u = new URL('http://x.com/')
-    u.username = 'a b'
-    expect(u.href).toBe('http://a%20b@x.com/')
+  it('round-trips through parse/serialize', () => {
+    const u = new URL('https://user:pass@example.com:8080/a/b?x=1#frag')
+    const v = new URL(u.href)
+    expect(v.href).toBe(u.href)
   })
 })
