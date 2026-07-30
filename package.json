@@ -1,7 +1,7 @@
 {
   "name": "@blyou/whatwg-url",
   "version": "0.0.1",
-  "description": "A tiny, zero-dependency WHATWG URL and URLSearchParams implementation for constrained environments.",
+  "description": "a zero-dependency, WHATWG URL & URLSearchParams implementation for DOM-less ES2023 environments.",
   "keywords": [
     "url",
     "urlsearchparams",
