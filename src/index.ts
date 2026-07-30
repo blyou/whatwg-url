@@ -20,10 +20,6 @@ const isASCII = (s: string) => {
   for (const ch of s) if (ch.codePointAt(0)! >= 128) return false
   return true
 }
-function hexAt(arr: string[], i: number): boolean {
-  return i < arr.length && isHex(arr[i].codePointAt(0)!)
-}
-
 const isForbiddenHostCP = (cp: number) =>
   cp === 0x00 ||
   cp === 0x09 ||
@@ -183,13 +179,21 @@ function domainToASCII(domain: string): string | null {
 }
 
 // ---- host parsing ----
-export type Host =
-  | { kind: 'none' }
-  | { kind: 'empty' }
-  | { kind: 'domain'; value: string }
-  | { kind: 'ipv4'; value: number }
-  | { kind: 'ipv6'; value: number[] }
-  | { kind: 'opaque'; value: string }
+const enum HK {
+  none = 0,
+  empty = 1,
+  domain = 2,
+  ipv4 = 3,
+  ipv6 = 4,
+  opaque = 5,
+}
+type Host =
+  | { kind: HK.none }
+  | { kind: HK.empty }
+  | { kind: HK.domain; value: string }
+  | { kind: HK.ipv4; value: number }
+  | { kind: HK.ipv6; value: number[] }
+  | { kind: HK.opaque; value: string }
 
 function parseIPv4Number(input: string): [number, boolean] | null {
   if (input === '') return null
@@ -205,7 +209,10 @@ function parseIPv4Number(input: string): [number, boolean] | null {
     r = 8
   }
   if (input === '') return [0, true]
-  for (const ch of input) if (Number.isNaN(parseInt(ch, r)) || parseInt(ch, r) >= r) return null
+  for (const ch of input) {
+    const d = parseInt(ch, r)
+    if (Number.isNaN(d) || d >= r) return null
+  }
   const out = parseInt(input, r)
   if (Number.isNaN(out)) return null
   return [out, err]
@@ -303,9 +310,6 @@ function parseIPv6(input: string): number[] | null {
     } else if (cur() !== null) {
       return null
     }
-    if (length > 1 && value < Math.pow(16, length - 1)) {
-      /* IPv6-piece-leading-zero */
-    }
     pieces[pieceIndex] = value
     pieceIndex++
   }
@@ -341,11 +345,11 @@ function parseHost(input: string, isOpaque: boolean): Host | null {
     if (input[input.length - 1] !== ']') return null
     const addr = parseIPv6(input.slice(1, -1))
     if (addr === null) return null
-    return { kind: 'ipv6', value: addr }
+    return { kind: HK.ipv6, value: addr }
   }
   if (isOpaque) {
     const o = parseOpaqueHost(input)
-    return o === null ? null : { kind: 'opaque', value: o }
+    return o === null ? null : { kind: HK.opaque, value: o }
   }
   if (input === '') return null
   // percent-encoded byte in domain is a validation error but allowed:
@@ -355,13 +359,13 @@ function parseHost(input: string, isOpaque: boolean): Host | null {
   if (endsInNumber(ascii)) {
     const ipv4 = parseIPv4(ascii)
     if (ipv4 === null) return null
-    return { kind: 'ipv4', value: ipv4 }
+    return { kind: HK.ipv4, value: ipv4 }
   }
-  return { kind: 'domain', value: ascii }
+  return { kind: HK.domain, value: ascii }
 }
 
 // ---- URL record ----
-export interface URLRecord {
+interface URLRecord {
   scheme: string
   username: string
   password: string
@@ -377,7 +381,7 @@ function newURLRecord(): URLRecord {
     scheme: '',
     username: '',
     password: '',
-    host: { kind: 'none' },
+    host: { kind: HK.none },
     port: null,
     path: [],
     query: null,
@@ -393,15 +397,14 @@ const DEFAULT_PORTS: Record<string, number> = {
   ws: 80,
   wss: 443,
 }
-const SPECIAL_SCHEMES = new Set(['ftp', 'file', 'http', 'https', 'ws', 'wss'])
 function isSpecial(scheme: string): boolean {
-  return SPECIAL_SCHEMES.has(scheme)
+  return scheme in DEFAULT_PORTS
 }
 function defaultPort(scheme: string): number | null {
   return scheme in DEFAULT_PORTS ? DEFAULT_PORTS[scheme] : null
 }
 function cannotHaveUserPwdPort(rec: URLRecord): boolean {
-  return rec.host.kind === 'none' || rec.host.kind === 'empty' || rec.scheme === 'file'
+  return rec.host.kind === HK.none || rec.host.kind === HK.empty || rec.scheme === 'file'
 }
 
 function serializeIPv4(n: number): string {
@@ -446,9 +449,9 @@ function serializeIPv6(pieces: number[]): string {
   return out
 }
 function serializeHost(host: Host): string {
-  if (host.kind === 'ipv4') return serializeIPv4(host.value)
-  if (host.kind === 'ipv6') return `[${serializeIPv6(host.value)}]`
-  if (host.kind === 'domain' || host.kind === 'opaque') return host.value
+  if (host.kind === HK.ipv4) return serializeIPv4(host.value)
+  if (host.kind === HK.ipv6) return `[${serializeIPv6(host.value)}]`
+  if (host.kind === HK.domain || host.kind === HK.opaque) return host.value
   return '' // empty / none
 }
 
@@ -476,28 +479,30 @@ function startsWithWindowsDriveLetter(s: string): boolean {
 }
 
 // ---- basic URL parser ----
-type State =
-  | 'scheme start'
-  | 'scheme'
-  | 'no scheme'
-  | 'special relative or authority'
-  | 'path or authority'
-  | 'relative'
-  | 'relative slash'
-  | 'authority'
-  | 'host'
-  | 'hostname'
-  | 'port'
-  | 'file'
-  | 'file slash'
-  | 'file host'
-  | 'path start'
-  | 'path'
-  | 'opaque path'
-  | 'query'
-  | 'fragment'
-  | 'special authority slashes'
-  | 'special authority ignore slashes'
+const enum S {
+  schemeStart = 0,
+  scheme = 1,
+  noScheme = 2,
+  specialRelOrAuth = 3,
+  pathOrAuth = 4,
+  relative = 5,
+  relativeSlash = 6,
+  authority = 7,
+  host = 8,
+  hostname = 9,
+  port = 10,
+  file = 11,
+  fileSlash = 12,
+  fileHost = 13,
+  pathStart = 14,
+  path = 15,
+  opaquePath = 16,
+  query = 17,
+  fragment = 18,
+  specialAuthSlashes = 19,
+  specialAuthIgnoreSlashes = 20,
+}
+type State = number
 
 function basicURLParser(
   input: string,
@@ -528,7 +533,7 @@ function basicURLParser(
   const len = cps.length
   // `remaining` is the substring from pointer (inclusive), matching the spec.
   const remaining = (p: number) => cps.slice(Math.max(0, p)).join('')
-  let state: State = stateOverride ?? 'scheme start'
+  let state: State = stateOverride ?? S.schemeStart
   let buffer = ''
   let atSignSeen = false,
     insideBrackets = false,
@@ -536,23 +541,25 @@ function basicURLParser(
   let pointer = 0
 
   const FAIL = null
+  const FS = (x: number) => isSpecial(url!.scheme) && x === 0x5c
+  const opaque = () => !isSpecial(url!.scheme) && url!.scheme !== ''
 
   while (true) {
     const c = pointer >= len ? null : cps[pointer]
     const cp = c === null ? -1 : c.codePointAt(0)!
 
     switch (state) {
-      case 'scheme start': {
+      case S.schemeStart: {
         if (c !== null && isAlpha(cp)) {
           buffer += String.fromCodePoint(cp).toLowerCase()
-          state = 'scheme'
+          state = S.scheme
         } else if (stateOverride === null) {
-          state = 'no scheme'
+          state = S.noScheme
           pointer--
         } else return FAIL
         break
       }
-      case 'scheme': {
+      case S.scheme: {
         if (c !== null && (isAlnum(cp) || cp === 0x2b || cp === 0x2d || cp === 0x2e)) {
           buffer += String.fromCodePoint(cp).toLowerCase()
         } else if (cp === 0x3a) {
@@ -564,7 +571,7 @@ function basicURLParser(
               buffer === 'file'
             )
               return url
-            if (url!.scheme === 'file' && url!.host.kind === 'empty') return url
+            if (url!.scheme === 'file' && url!.host.kind === HK.empty) return url
           }
           url!.scheme = buffer
           if (stateOverride !== null) {
@@ -573,29 +580,25 @@ function basicURLParser(
           }
           buffer = ''
           if (url!.scheme === 'file') {
-            if (!(cps[pointer + 1] === '/' && cps[pointer + 2] === '/')) {
-              /* validation error */
-            }
-            state = 'file'
+            state = S.file
           } else if (isSpecial(url!.scheme)) {
-            if (base !== null && base.scheme === url!.scheme)
-              state = 'special relative or authority'
-            else state = 'special authority slashes'
+            if (base !== null && base.scheme === url!.scheme) state = S.specialRelOrAuth
+            else state = S.specialAuthSlashes
           } else if (cps[pointer + 1] === '/') {
-            state = 'path or authority'
+            state = S.pathOrAuth
             pointer++
           } else {
             url!.path = ''
-            state = 'opaque path'
+            state = S.opaquePath
           }
         } else if (stateOverride === null) {
           buffer = ''
-          state = 'no scheme'
+          state = S.noScheme
           pointer = -1
         } else return FAIL
         break
       }
-      case 'no scheme': {
+      case S.noScheme: {
         const baseOpaque = base !== null && !Array.isArray(base.path)
         if (base === null || (baseOpaque && cp !== 0x23)) return FAIL
         if (baseOpaque && cp === 0x23) {
@@ -603,39 +606,39 @@ function basicURLParser(
           url!.path = base!.path
           url!.query = base!.query
           url!.fragment = ''
-          state = 'fragment'
+          state = S.fragment
         } else if (base!.scheme !== 'file') {
-          state = 'relative'
+          state = S.relative
           pointer--
         } else {
-          state = 'file'
+          state = S.file
           pointer--
         }
         break
       }
-      case 'special relative or authority': {
+      case S.specialRelOrAuth: {
         if (cp === 0x2f && remaining(pointer).startsWith('//')) {
-          state = 'special authority ignore slashes'
+          state = S.specialAuthIgnoreSlashes
           pointer++
         } else {
-          /* validation error */ state = 'relative'
+          /* validation error */ state = S.relative
           pointer--
         }
         break
       }
-      case 'path or authority': {
-        if (cp === 0x2f) state = 'authority'
+      case S.pathOrAuth: {
+        if (cp === 0x2f) state = S.authority
         else {
-          state = 'path'
+          state = S.path
           pointer--
         }
         break
       }
-      case 'relative': {
+      case S.relative: {
         url!.scheme = base!.scheme
-        if (cp === 0x2f) state = 'relative slash'
-        else if (isSpecial(url!.scheme) && cp === 0x5c) {
-          /* validation error */ state = 'relative slash'
+        if (cp === 0x2f) state = S.relativeSlash
+        else if (FS(cp)) {
+          /* validation error */ state = S.relativeSlash
         } else {
           url!.username = base!.username
           url!.password = base!.password
@@ -645,56 +648,51 @@ function basicURLParser(
           url!.query = base!.query
           if (cp === 0x3f) {
             url!.query = ''
-            state = 'query'
+            state = S.query
           } else if (cp === 0x23) {
             url!.fragment = ''
-            state = 'fragment'
+            state = S.fragment
           } else if (c !== null) {
             url!.query = null
             shortenPath(url!)
-            state = 'path'
+            state = S.path
             pointer--
           }
         }
         break
       }
-      case 'relative slash': {
-        if (isSpecial(url!.scheme) && (cp === 0x2f || cp === 0x5c)) {
-          if (cp === 0x5c) {
-            /* validation error */
-          }
-          state = 'special authority ignore slashes'
-        } else if (cp === 0x2f) state = 'authority'
+      case S.relativeSlash: {
+        if (isSpecial(url!.scheme) && (cp === 0x2f || FS(cp))) {
+          state = S.specialAuthIgnoreSlashes
+        } else if (cp === 0x2f) state = S.authority
         else {
           url!.username = base!.username
           url!.password = base!.password
           url!.host = base!.host
           url!.port = base!.port
-          state = 'path'
+          state = S.path
           pointer--
         }
         break
       }
-      case 'special authority slashes': {
+      case S.specialAuthSlashes: {
         if (cp === 0x2f && remaining(pointer).startsWith('//')) {
-          state = 'special authority ignore slashes'
+          state = S.specialAuthIgnoreSlashes
           pointer++
         } else {
-          /* validation error */ state = 'special authority ignore slashes'
+          /* validation error */ state = S.specialAuthIgnoreSlashes
           pointer--
         }
         break
       }
-      case 'special authority ignore slashes': {
+      case S.specialAuthIgnoreSlashes: {
         if (cp !== 0x2f && cp !== 0x5c) {
-          state = 'authority'
+          state = S.authority
           pointer--
-        } else {
-          /* validation error */
         }
         break
       }
-      case 'authority': {
+      case S.authority: {
         if (cp === 0x40) {
           if (atSignSeen) buffer = `%40${buffer}`
           atSignSeen = true
@@ -708,48 +706,36 @@ function basicURLParser(
             else url!.username += utf8Pct(ch, inUser)
           }
           buffer = ''
-        } else if (
-          c === null ||
-          cp === 0x2f ||
-          cp === 0x3f ||
-          cp === 0x23 ||
-          (isSpecial(url!.scheme) && cp === 0x5c)
-        ) {
+        } else if (c === null || cp === 0x2f || cp === 0x3f || cp === 0x23 || FS(cp)) {
           if (atSignSeen && buffer === '') return FAIL
           pointer -= [...buffer].length + 1
           buffer = ''
-          state = 'host'
+          state = S.host
         } else buffer += c
         break
       }
-      case 'host':
-      case 'hostname': {
-        if (stateOverride === 'host' && url!.scheme === 'file') {
+      case S.host:
+      case S.hostname: {
+        if (stateOverride === S.host && url!.scheme === 'file') {
           pointer--
-          state = 'file host'
+          state = S.fileHost
           break
         }
         if (cp === 0x3a && !insideBrackets) {
           if (buffer === '') return FAIL
-          if (stateOverride === 'hostname') return FAIL
-          const h = parseHost(buffer, !isSpecial(url!.scheme) && url!.scheme !== '')
+          if (stateOverride === S.hostname) return FAIL
+          const h = parseHost(buffer, opaque())
           if (h === null) return FAIL
           url!.host = h
           buffer = ''
-          state = 'port'
-        } else if (
-          c === null ||
-          cp === 0x2f ||
-          cp === 0x3f ||
-          cp === 0x23 ||
-          (isSpecial(url!.scheme) && cp === 0x5c)
-        ) {
+          state = S.port
+        } else if (c === null || cp === 0x2f || cp === 0x3f || cp === 0x23 || FS(cp)) {
           pointer--
-          if (url!.host.kind === 'none' && buffer === '') {
-            if (base !== null && base.host.kind !== 'none') {
+          if (url!.host.kind === HK.none && buffer === '') {
+            if (base !== null && base.host.kind !== HK.none) {
               // host elided; inherit from base at the end of parsing
               buffer = ''
-              state = 'path start'
+              state = S.pathStart
               if (stateOverride !== null) return url
               break
             }
@@ -761,11 +747,11 @@ function basicURLParser(
             (url!.username !== '' || url!.password !== '' || url!.port !== null)
           )
             return FAIL
-          const h = parseHost(buffer, !isSpecial(url!.scheme) && url!.scheme !== '')
+          const h = parseHost(buffer, opaque())
           if (h === null) return FAIL
           url!.host = h
           buffer = ''
-          state = 'path start'
+          state = S.pathStart
           if (stateOverride !== null) return url
         } else {
           if (cp === 0x5b) insideBrackets = true
@@ -774,14 +760,14 @@ function basicURLParser(
         }
         break
       }
-      case 'port': {
+      case S.port: {
         if (isDigit(cp)) buffer += String.fromCodePoint(cp)
         else if (
           c === null ||
           cp === 0x2f ||
           cp === 0x3f ||
           cp === 0x23 ||
-          (isSpecial(url!.scheme) && cp === 0x5c) ||
+          FS(cp) ||
           stateOverride !== null
         ) {
           if (buffer !== '') {
@@ -791,50 +777,44 @@ function basicURLParser(
             buffer = ''
             if (stateOverride !== null) return url
           } else if (stateOverride !== null) return FAIL
-          state = 'path start'
+          state = S.pathStart
           pointer--
         } else return FAIL
         break
       }
-      case 'file': {
+      case S.file: {
         url!.scheme = 'file'
-        url!.host = { kind: 'empty' }
-        if (cp === 0x2f || cp === 0x5c) {
-          if (cp === 0x5c) {
-            /* validation error */
-          }
-          state = 'file slash'
+        url!.host = { kind: HK.empty }
+        if (cp === 0x2f || FS(cp)) {
+          state = S.fileSlash
         } else if (base !== null && base.scheme === 'file') {
           url!.host = base.host
           url!.path = Array.isArray(base.path) ? [...base.path] : []
           url!.query = base.query
           if (cp === 0x3f) {
             url!.query = ''
-            state = 'query'
+            state = S.query
           } else if (cp === 0x23) {
             url!.fragment = ''
-            state = 'fragment'
+            state = S.fragment
           } else if (c !== null) {
             url!.query = null
             if (!startsWithWindowsDriveLetter(remaining(pointer))) shortenPath(url!)
             else {
               /* validation error */ url!.path = []
             }
-            state = 'path'
+            state = S.path
             pointer--
           }
         } else {
-          state = 'path'
+          state = S.path
           pointer--
         }
         break
       }
-      case 'file slash': {
-        if (cp === 0x2f || cp === 0x5c) {
-          if (cp === 0x5c) {
-            /* validation error */
-          }
-          state = 'file host'
+      case S.fileSlash: {
+        if (cp === 0x2f || FS(cp)) {
+          state = S.fileHost
         } else {
           if (base !== null && base.scheme === 'file') {
             url!.host = base.host
@@ -847,70 +827,64 @@ function basicURLParser(
               if (Array.isArray(url!.path)) url!.path.push(base.path[0])
             }
           }
-          state = 'path'
+          state = S.path
           pointer--
         }
         break
       }
-      case 'file host': {
+      case S.fileHost: {
         if (c === null || cp === 0x2f || cp === 0x5c || cp === 0x3f || cp === 0x23) {
           pointer--
           if (stateOverride === null && isWindowsDriveLetter(buffer)) {
-            /* validation error */ state = 'path'
+            /* validation error */ state = S.path
           } else if (buffer === '') {
-            url!.host = { kind: 'empty' }
+            url!.host = { kind: HK.empty }
             if (stateOverride !== null) return url
-            state = 'path start'
+            state = S.pathStart
           } else {
             let h = parseHost(buffer, false)
             if (h === null) return FAIL
-            if (h.kind === 'domain' && h.value === 'localhost') h = { kind: 'empty' }
+            if (h.kind === HK.domain && h.value === 'localhost') h = { kind: HK.empty }
             url!.host = h
             if (stateOverride !== null) return url
             buffer = ''
-            state = 'path start'
+            state = S.pathStart
           }
         } else buffer += c
         break
       }
-      case 'path start': {
+      case S.pathStart: {
         if (isSpecial(url!.scheme)) {
-          if (cp === 0x5c) {
-            /* validation error */
-          }
-          state = 'path'
-          if (cp !== 0x2f && cp !== 0x5c) pointer--
+          state = S.path
+          if (cp !== 0x2f && !FS(cp)) pointer--
         } else if (stateOverride === null && cp === 0x3f) {
           url!.query = ''
-          state = 'query'
+          state = S.query
         } else if (stateOverride === null && cp === 0x23) {
           url!.fragment = ''
-          state = 'fragment'
+          state = S.fragment
         } else if (c !== null) {
-          state = 'path'
+          state = S.path
           if (cp !== 0x2f) pointer--
-        } else if (stateOverride !== null && url!.host.kind === 'none') {
+        } else if (stateOverride !== null && url!.host.kind === HK.none) {
           url!.path = ['']
         }
         break
       }
-      case 'path': {
+      case S.path: {
         if (
           c === null ||
           cp === 0x2f ||
-          (isSpecial(url!.scheme) && cp === 0x5c) ||
+          FS(cp) ||
           (stateOverride === null && (cp === 0x3f || cp === 0x23))
         ) {
-          if (isSpecial(url!.scheme) && cp === 0x5c) {
-            /* validation error */
-          }
           if (buffer === '..') {
             shortenPath(url!)
-            if (cp !== 0x2f && !(isSpecial(url!.scheme) && cp === 0x5c)) {
+            if (cp !== 0x2f && !FS(cp)) {
               if (Array.isArray(url!.path)) url!.path.push('')
             }
           } else if (buffer === '.') {
-            if (cp !== 0x2f && !(isSpecial(url!.scheme) && cp === 0x5c)) {
+            if (cp !== 0x2f && !FS(cp)) {
               if (Array.isArray(url!.path)) url!.path.push('')
             }
           } else {
@@ -927,42 +901,30 @@ function basicURLParser(
           buffer = ''
           if (cp === 0x3f) {
             url!.query = ''
-            state = 'query'
+            state = S.query
           } else if (cp === 0x23) {
             url!.fragment = ''
-            state = 'fragment'
+            state = S.fragment
           }
         } else {
-          if (!isURLCP(cp) && cp !== 0x25) {
-            /* validation error */
-          }
-          if (cp === 0x25 && !(hexAt(cps, pointer + 1) && hexAt(cps, pointer + 2))) {
-            /* validation error */
-          }
           buffer += utf8Pct(c!, inPath)
         }
         break
       }
-      case 'opaque path': {
+      case S.opaquePath: {
         if (cp === 0x3f) {
           url!.path = buffer
           url!.query = ''
-          state = 'query'
+          state = S.query
         } else if (cp === 0x23) {
           url!.path = buffer
           url!.fragment = ''
-          state = 'fragment'
+          state = S.fragment
         } else if (cp === 0x20) {
           const nxt = cps.slice(pointer + 1).join('')
           if (nxt.startsWith('?') || nxt.startsWith('#')) buffer += '%20'
           else buffer += ' '
         } else if (c !== null) {
-          if (!isURLCP(cp) && cp !== 0x25) {
-            /* validation error */
-          }
-          if (cp === 0x25 && !(hexAt(cps, pointer + 1) && hexAt(cps, pointer + 2))) {
-            /* validation error */
-          }
           buffer += utf8Pct(c!, inC0)
         }
         if (c === null) {
@@ -970,39 +932,27 @@ function basicURLParser(
         }
         break
       }
-      case 'query': {
+      case S.query: {
         const set = isSpecial(url!.scheme) ? inSQuery : inQuery
         if (stateOverride === null && cp === 0x23) {
           url!.query = (url!.query ?? '') + utf8Pct(buffer, set)
           buffer = ''
           url!.fragment = ''
-          state = 'fragment'
+          state = S.fragment
         } else if (c !== null && cp !== 0x23) {
-          if (!isURLCP(cp) && cp !== 0x25) {
-            /* validation error */
-          }
-          if (cp === 0x25 && !(hexAt(cps, pointer + 1) && hexAt(cps, pointer + 2))) {
-            /* validation error */
-          }
           buffer += c
         } else {
           url!.query = (url!.query ?? '') + utf8Pct(buffer, set)
           buffer = ''
           if (cp === 0x23) {
             url!.fragment = ''
-            state = 'fragment'
+            state = S.fragment
           }
         }
         break
       }
-      case 'fragment': {
+      case S.fragment: {
         if (c !== null) {
-          if (!isURLCP(cp) && cp !== 0x25) {
-            /* validation error */
-          }
-          if (cp === 0x25 && !(hexAt(cps, pointer + 1) && hexAt(cps, pointer + 2))) {
-            /* validation error */
-          }
           url!.fragment = (url!.fragment ?? '') + utf8Pct(c!, inFrag)
         }
         break
@@ -1015,7 +965,7 @@ function basicURLParser(
 
   // Inherit host/username/password/port (and opaque path) from base when the
   // authority was elided, per WHATWG "If url's host is null" step.
-  if (url!.host.kind === 'none' && base !== null && base.host.kind !== 'none') {
+  if (url!.host.kind === HK.none && base !== null && base.host.kind !== HK.none) {
     url!.username = base.username
     url!.password = base.password
     url!.host = base.host
@@ -1033,9 +983,9 @@ function serializePath(url: URLRecord): string {
   for (const seg of url.path) out += `/${seg}`
   return out
 }
-export function serializeURL(rec: URLRecord, excludeFragment = false): string {
+function serializeURL(rec: URLRecord, excludeFragment = false): string {
   let out = `${rec.scheme}:`
-  if (rec.host.kind !== 'none') {
+  if (rec.host.kind !== HK.none) {
     out += '//'
     if (rec.username !== '' || rec.password !== '') {
       out += rec.username
@@ -1044,20 +994,10 @@ export function serializeURL(rec: URLRecord, excludeFragment = false): string {
     }
     out += serializeHost(rec.host)
     if (rec.port !== null) out += `:${rec.port}`
-  } else if (
-    rec.path === '' ||
-    (Array.isArray(rec.path) && rec.path.length > 1 && rec.path[0] === '')
-  ) {
-    // empty-host relative-path guard
-    if (!Array.isArray(rec.path) || rec.path.length > 1) {
-      if (Array.isArray(rec.path) && rec.path[0] === '') {
-        out += '/.'
-      }
-    }
   }
-  // the spec's weird step 3: if host null, not opaque, path size>1 and path[0]=='' => append "/."
+  // if host null, not opaque, path size>1 and path[0]=='' => append "/."
   if (
-    rec.host.kind === 'none' &&
+    rec.host.kind === HK.none &&
     Array.isArray(rec.path) &&
     rec.path.length > 1 &&
     rec.path[0] === ''
@@ -1070,10 +1010,10 @@ export function serializeURL(rec: URLRecord, excludeFragment = false): string {
   return out
 }
 
-export function serializeOrigin(rec: URLRecord): string | null {
+function serializeOrigin(rec: URLRecord): string | null {
   switch (rec.scheme) {
     case 'blob': {
-      if (rec.host.kind !== 'none') {
+      if (rec.host.kind !== HK.none) {
         const inner = basicURLParser(serializePath(rec), null, null, null)
         if (
           inner !== null &&
@@ -1129,29 +1069,6 @@ export class URLSearchParams {
           this.list.push([key, String((init as Record<string, string>)[key])])
         }
       }
-    }
-  }
-
-  initialize(
-    init: string | string[][] | Record<string, string> | Iterable<[string, string]>,
-  ): void {
-    if (Array.isArray(init)) {
-      for (const inner of init) {
-        if (inner.length !== 2) throw new TypeError('Each tuple must have exactly two elements')
-        this.list.push([String(inner[0]), String(inner[1])])
-      }
-    } else if (
-      init &&
-      typeof init === 'object' &&
-      typeof (init as { [Symbol.iterator]?: unknown })[Symbol.iterator] === 'function'
-    ) {
-      for (const pair of init as Iterable<[string, string]>) {
-        const arr = [...pair]
-        if (arr.length !== 2) throw new TypeError('Each tuple must have exactly two elements')
-        this.list.push([String(arr[0]), String(arr[1])])
-      }
-    } else {
-      this.list = parseFormString(String(init ?? ''))
     }
   }
 
@@ -1295,9 +1212,7 @@ export class URL {
     const parsed = basicURLParser(url, baseRec, null, null)
     if (parsed === null) throw new TypeError('Invalid URL')
     this.url = parsed
-    const query = this.url.query ?? ''
-    this.queryObj = new URLSearchParams()
-    this.queryObj.initialize(query)
+    this.queryObj = new URLSearchParams(this.url.query ?? '')
     ;(this.queryObj as unknown as { urlObj: URL }).urlObj = this
   }
 
@@ -1322,7 +1237,7 @@ export class URL {
     return `${this.url.scheme}:`
   }
   set protocol(v: string) {
-    basicURLParser(`${v}:`, null, this.url, 'scheme start')
+    basicURLParser(`${v}:`, null, this.url, S.schemeStart)
   }
 
   get username(): string {
@@ -1341,22 +1256,22 @@ export class URL {
   }
 
   get host(): string {
-    if (this.url.host.kind === 'none') return ''
+    if (this.url.host.kind === HK.none) return ''
     if (this.url.port === null) return serializeHost(this.url.host)
     return `${serializeHost(this.url.host)}:${this.url.port}`
   }
   set host(v: string) {
     if (!Array.isArray(this.url.path)) return // opaque path
-    basicURLParser(v, null, this.url, 'host')
+    basicURLParser(v, null, this.url, S.host)
   }
 
   get hostname(): string {
-    if (this.url.host.kind === 'none') return ''
+    if (this.url.host.kind === HK.none) return ''
     return serializeHost(this.url.host)
   }
   set hostname(v: string) {
     if (!Array.isArray(this.url.path)) return // opaque path
-    basicURLParser(v, null, this.url, 'hostname')
+    basicURLParser(v, null, this.url, S.hostname)
   }
 
   get port(): string {
@@ -1368,7 +1283,7 @@ export class URL {
       this.url.port = null
       return
     }
-    basicURLParser(v, null, this.url, 'port')
+    basicURLParser(v, null, this.url, S.port)
   }
 
   get pathname(): string {
@@ -1377,7 +1292,7 @@ export class URL {
   set pathname(v: string) {
     if (!Array.isArray(this.url.path)) return // opaque path
     this.url.path = []
-    basicURLParser(v, null, this.url, 'path start')
+    basicURLParser(v, null, this.url, S.pathStart)
   }
 
   get search(): string {
@@ -1391,7 +1306,7 @@ export class URL {
     }
     const input = v[0] === '?' ? v.slice(1) : v
     this.url.query = ''
-    basicURLParser(input, null, this.url, 'query')
+    basicURLParser(input, null, this.url, S.query)
     this.queryObj.list = parseFormString(input)
   }
 
@@ -1409,7 +1324,7 @@ export class URL {
     }
     const input = v[0] === '#' ? v.slice(1) : v
     this.url.fragment = ''
-    basicURLParser(input, null, this.url, 'fragment')
+    basicURLParser(input, null, this.url, S.fragment)
   }
 
   toString(): string {
@@ -1426,9 +1341,7 @@ export class URL {
     if (parsed === null) return null
     const result = Object.create(URL.prototype) as URL
     result.url = parsed
-    const q = parsed.query ?? ''
-    result.queryObj = new URLSearchParams()
-    result.queryObj.initialize(q)
+    result.queryObj = new URLSearchParams(parsed.query ?? '')
     ;(result.queryObj as unknown as { urlObj: URL }).urlObj = result
     return result
   }
