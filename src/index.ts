@@ -14,6 +14,7 @@ const nativeMath = Math
 const nativeMathMax = nativeMath.max
 const nativeMathFloor = nativeMath.floor
 const nativeMathPow = nativeMath.pow
+const nativeUint8Array = Uint8Array
 
 const encoder = new TextEncoder()
 const decoder = new TextDecoder('utf8', { fatal: false })
@@ -86,7 +87,7 @@ const percentDecodeBytes = (input: Uint8Array): Uint8Array => {
       i += 2
     } else out.push(b)
   }
-  return Uint8Array.from(out)
+  return nativeUint8Array.from(out)
 }
 
 const utf8PctCP = (cp: number, set: (cp: number) => boolean): string => {
@@ -730,9 +731,9 @@ const basicURLParser = (
         if (cp == 0x3a && !insideBrackets) {
           if (buffer == '') return
           if (stateOverride == S.hostname) return
-          const h = parseHost(buffer, opaque())
-          if (h == null) return
-          url._host = h
+          const host = parseHost(buffer, opaque())
+          if (host == null) return
+          url._host = host
           buffer = ''
           state = S.port
         } else if (c == null || cp == 0x2f || cp == 0x3f || cp == 0x23 || FS(cp)) {
@@ -753,9 +754,9 @@ const basicURLParser = (
             (url._username != '' || url._password != '' || url._port != null)
           )
             return
-          const h = parseHost(buffer, opaque())
-          if (h == null) return
-          url._host = h
+          const host = parseHost(buffer, opaque())
+          if (host == null) return
+          url._host = host
           buffer = ''
           state = S.pathStart
           if (stateOverride != null) return url
@@ -1008,14 +1009,10 @@ const serializeOrigin = (rec: URLRecord): string | null | undefined => {
     case 'http':
     case 'https':
     case 'ws':
-    case 'wss': {
-      const host = serializeHost(rec._host)
-      return `${rec._scheme}://${host}${rec._port != null ? `:${rec._port}` : ''}`
-    }
+    case 'wss':
+      return `${rec._scheme}://${serializeHost(rec._host)}${rec._port != null ? `:${rec._port}` : ''}`
     case 'file':
       return 'file://'
-    default:
-      return // opaque origin
   }
 }
 
@@ -1056,7 +1053,7 @@ const splitBytes = (bytes: Uint8Array, sep: number): Uint8Array[] => {
   return out
 }
 const replacePlus = (bytes: Uint8Array): Uint8Array => {
-  return Uint8Array.from(bytes.map(b => (b == 0x2b ? 0x20 : b)))
+  return nativeUint8Array.from(bytes.map(b => (b == 0x2b ? 0x20 : b)))
 }
 const serializeFormList = (list: Tuple[]): string => {
   let out = ''
