@@ -22,7 +22,11 @@ export default defineConfig({
         const result = await minify(code, {
           module: isModule,
           compress: { passes: 3 },
-          mangle: { properties: true },
+          mangle: {
+            properties: {
+              reserved: ['ftp', 'file', 'http', 'https', 'ws', 'wss'],
+            },
+          },
         })
         return { code: result.code ?? code }
       },

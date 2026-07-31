@@ -1,4 +1,4 @@
-/**
+/*
  * @blyou/whatwg-url — a zero-dependency, WHATWG URL & URLSearchParams
  * implementation for DOM-less ES2023 environments.
  * Follows https://url.spec.whatwg.org/ .
@@ -10,6 +10,10 @@ const nativeString = String
 const nativeStringFromCharCode = nativeString.fromCharCode
 const nativeStringFromCodePoint = nativeString.fromCodePoint
 const nativeArrayIsArray = Array.isArray
+const nativeMath = Math
+const nativeMathMax = nativeMath.max
+const nativeMathFloor = nativeMath.floor
+const nativeMathPow = nativeMath.pow
 
 const encoder = new TextEncoder()
 const decoder = new TextDecoder('utf8', { fatal: false })
@@ -73,7 +77,7 @@ const inForm = (cp: number) => !(isAlnum(cp) || [0x2a, 0x2d, 0x2e, 0x5f].include
 
 const pctByte = (b: number) => `%${b.toString(16).toUpperCase().padStart(2, '0')}`
 
-function percentDecodeBytes(input: Uint8Array): Uint8Array {
+const percentDecodeBytes = (input: Uint8Array): Uint8Array => {
   const out: number[] = []
   for (let i = 0; i < input.length; i++) {
     const b = input[i]
@@ -85,18 +89,18 @@ function percentDecodeBytes(input: Uint8Array): Uint8Array {
   return Uint8Array.from(out)
 }
 
-function utf8PctCP(cp: number, set: (cp: number) => boolean): string {
+const utf8PctCP = (cp: number, set: (cp: number) => boolean): string => {
   if (!set(cp)) return nativeStringFromCodePoint(cp)
   let out = ''
   for (const b of utf8Encode(nativeStringFromCodePoint(cp))) out += pctByte(b)
   return out
 }
-function utf8Pct(s: string, set: (cp: number) => boolean): string {
+const utf8Pct = (s: string, set: (cp: number) => boolean): string => {
   let out = ''
   for (const ch of s) out += utf8PctCP(ch.codePointAt(0)!, set)
   return out
 }
-function formPct(s: string): string {
+const formPct = (s: string): string => {
   let out = ''
   for (const b of utf8Encode(s))
     out += b == 0x20 ? '+' : !inForm(b) ? nativeStringFromCharCode(b) : pctByte(b)
@@ -112,17 +116,17 @@ const BASE = 36,
   INIT_BIAS = 72,
   INIT_N = 128
 const pDigit = (d: number) => nativeStringFromCharCode(d < 26 ? d + 0x61 : d - 26 + 0x30)
-function adapt(delta: number, n: number, first: boolean): number {
-  delta = first ? Math.floor(delta / DAMP) : delta >> 1
-  delta += Math.floor(delta / n)
+const adapt = (delta: number, n: number, first: boolean): number => {
+  delta = first ? nativeMathFloor(delta / DAMP) : delta >> 1
+  delta += nativeMathFloor(delta / n)
   let k = 0
   while (delta > ((BASE - TMIN) * TMAX) >> 1) {
-    delta = Math.floor(delta / (BASE - TMIN))
+    delta = nativeMathFloor(delta / (BASE - TMIN))
     k += BASE
   }
-  return Math.floor(k + ((BASE - TMIN + 1) * delta) / (delta + SKEW))
+  return nativeMathFloor(k + ((BASE - TMIN + 1) * delta) / (delta + SKEW))
 }
-function punyEncode(input: string): string {
+const punyEncode = (input: string): string => {
   const chars = [...input]
   let n = INIT_N,
     delta = 0,
@@ -153,7 +157,7 @@ function punyEncode(input: string): string {
           const t = k <= bias ? TMIN : k >= bias + TMAX ? TMAX : k - bias
           if (q < t) break
           out += pDigit(t + ((q - t) % (BASE - t)))
-          q = Math.floor((q - t) / (BASE - t))
+          q = nativeMathFloor((q - t) / (BASE - t))
         }
         out += pDigit(q)
         bias = adapt(delta, handled + 1, handled == basic)
@@ -166,7 +170,7 @@ function punyEncode(input: string): string {
   }
   return out
 }
-function domainToASCII(domain: string): string | null | undefined {
+const domainToASCII = (domain: string): string | null | undefined => {
   if (isASCII(domain)) return domain.toLowerCase()
   let norm = domain
   try {
@@ -202,7 +206,7 @@ type Host =
   | { $kind: HK.ipv6; $value: number[] }
   | { $kind: HK.opaque; $value: string }
 
-function parseIPv4Number(input: string): [number, boolean] | null | undefined {
+const parseIPv4Number = (input: string): [number, boolean] | null | undefined => {
   if (input == '') return
   let err = false,
     r = 10
@@ -224,7 +228,7 @@ function parseIPv4Number(input: string): [number, boolean] | null | undefined {
   if (nativeNumberIsNaN(out)) return
   return [out, err]
 }
-function parseIPv4(input: string): number | null | undefined {
+const parseIPv4 = (input: string): number | null | undefined => {
   const parts = input.split('.')
   if (parts[parts.length - 1] == '') {
     if (parts.length > 1) parts.pop()
@@ -237,17 +241,17 @@ function parseIPv4(input: string): number | null | undefined {
     nums.push(r[0])
   }
   for (let i = 0; i < nums.length - 1; i++) if (nums[i] > 255) return
-  if (nums[nums.length - 1] >= Math.pow(256, 5 - nums.length)) return
+  if (nums[nums.length - 1] >= nativeMathPow(256, 5 - nums.length)) return
   let ipv4 = nums[nums.length - 1]
   nums.pop()
   let counter = 0
   for (const nm of nums) {
-    ipv4 += nm * Math.pow(256, 3 - counter)
+    ipv4 += nm * nativeMathPow(256, 3 - counter)
     counter++
   }
   return ipv4
 }
-function endsInNumber(input: string): boolean {
+const endsInNumber = (input: string): boolean => {
   const parts = input.split('.')
   if (parts[parts.length - 1] == '') parts.pop()
   const last = parts[parts.length - 1]
@@ -255,7 +259,7 @@ function endsInNumber(input: string): boolean {
   if (last != '' && /^[0-9]+$/.test(last)) return true
   return parseIPv4Number(last) != null
 }
-function parseIPv6(input: string): number[] | null | undefined {
+const parseIPv6 = (input: string): number[] | null | undefined => {
   const pieces = [0, 0, 0, 0, 0, 0, 0, 0]
   let pieceIndex = 0,
     compress: number | null = null
@@ -335,7 +339,7 @@ function parseIPv6(input: string): number[] | null | undefined {
   }
   return pieces
 }
-function parseOpaqueHost(input: string): string | null | undefined {
+const parseOpaqueHost = (input: string): string | null | undefined => {
   for (const ch of input) {
     const cp = ch.codePointAt(0)!
     if (isForbiddenHostCP(cp)) return
@@ -347,7 +351,7 @@ function parseOpaqueHost(input: string): string | null | undefined {
   }
   return utf8Pct(input, inC0)
 }
-function parseHost(input: string, isOpaque: boolean): Host | null | undefined {
+const parseHost = (input: string, isOpaque: boolean): Host | null | undefined => {
   if (input[0] == '[') {
     if (input[input.length - 1] != ']') return
     const addr = parseIPv6(input.slice(1, -1))
@@ -391,20 +395,20 @@ const DEFAULT_PORTS: Record<string, number> = {
   ws: 80,
   wss: 443,
 }
-function isSpecial(scheme: string): boolean {
+const isSpecial = (scheme: string): boolean => {
   return scheme in DEFAULT_PORTS
 }
-function defaultPort(scheme: string): number | undefined {
+const defaultPort = (scheme: string): number | undefined => {
   return DEFAULT_PORTS[scheme]
 }
-function cannotHaveUserPwdPort(rec: URLRecord): boolean {
+const cannotHaveUserPwdPort = (rec: URLRecord): boolean => {
   return rec._host.$kind == HK.none || rec._host.$kind == HK.empty || rec._scheme == 'file'
 }
 
-function serializeIPv4(n: number): string {
+const serializeIPv4 = (n: number): string => {
   return `${(n >>> 24) & 0xff}.${(n >>> 16) & 0xff}.${(n >>> 8) & 0xff}.${n & 0xff}`
 }
-function findCompressed(pieces: number[]): number | null | undefined {
+const findCompressed = (pieces: number[]): number | null | undefined => {
   let longest = null,
     longestSize = 1,
     found = null,
@@ -425,7 +429,7 @@ function findCompressed(pieces: number[]): number | null | undefined {
   if (foundSize > longestSize) return found
   return longest
 }
-function serializeIPv6(pieces: number[]): string {
+const serializeIPv6 = (pieces: number[]): string => {
   let out = ''
   const compress = findCompressed(pieces)
   let ignore0 = false
@@ -442,27 +446,27 @@ function serializeIPv6(pieces: number[]): string {
   }
   return out
 }
-function serializeHost(host: Host): string {
+const serializeHost = (host: Host): string => {
   if (host.$kind == HK.ipv4) return serializeIPv4(host.$value)
   if (host.$kind == HK.ipv6) return `[${serializeIPv6(host.$value)}]`
   if (host.$kind == HK.domain || host.$kind == HK.opaque) return host.$value
   return '' // empty / none
 }
 
-function shortenPath(rec: URLRecord): void {
+const shortenPath = (rec: URLRecord): void => {
   if (rec._path === '' || !nativeArrayIsArray(rec._path)) return
   if (rec._scheme == 'file' && rec._path.length == 1 && isWindowsDriveLetter(rec._path[0])) return
   if (rec._path.length > 0) rec._path.pop()
 }
 
 // Windows drive letter: two code points, first ASCII alpha, second ':' or '|'.
-function isWindowsDriveLetter(seg: string): boolean {
+const isWindowsDriveLetter = (seg: string): boolean => {
   if (seg.length < 2) return false
   const a = seg.codePointAt(0)!,
     b = seg.codePointAt(1)!
   return isAlpha(a) && (b == 0x3a || b == 0x7c)
 }
-function startsWithWindowsDriveLetter(s: string): boolean {
+const startsWithWindowsDriveLetter = (s: string): boolean => {
   if (s.length < 2) return false
   const a = s.codePointAt(0)!,
     b = s.codePointAt(1)!
@@ -498,12 +502,12 @@ const enum S {
 }
 type State = number
 
-function basicURLParser(
+const basicURLParser = (
   input: string,
   base?: URLRecord | null,
   url?: URLRecord | null,
   stateOverride?: State | null,
-): URLRecord | null | undefined {
+): URLRecord | null | undefined => {
   input = nativeString(input)
   if (url == null) {
     const rec: URLRecord = {
@@ -535,7 +539,7 @@ function basicURLParser(
   const cps = [...input]
   const len = cps.length
   // `remaining` is the substring from pointer (inclusive), matching the spec.
-  const remaining = (p: number) => cps.slice(Math.max(0, p)).join('')
+  const remaining = (p: number) => cps.slice(nativeMathMax(0, p)).join('')
   let state: State = stateOverride ?? S.schemeStart
   let buffer = ''
   let atSignSeen = false,
@@ -979,14 +983,14 @@ function basicURLParser(
 }
 
 // ---- serialization ----
-function serializePath(url: URLRecord): string {
+const serializePath = (url: URLRecord): string => {
   if (!nativeArrayIsArray(url._path)) return url._path // opaque
   let out = ''
   for (const seg of url._path) out += `/${seg}`
   return out
 }
 
-function serializeOrigin(rec: URLRecord): string | null | undefined {
+const serializeOrigin = (rec: URLRecord): string | null | undefined => {
   switch (rec._scheme) {
     case 'blob': {
       if (rec._host.$kind != HK.none) {
@@ -1013,6 +1017,61 @@ function serializeOrigin(rec: URLRecord): string | null | undefined {
     default:
       return // opaque origin
   }
+}
+
+// application/x-www-form-urlencoded parser (operates on a string -> bytes).
+const parseFormString = (input: string): Tuple[] => {
+  const bytes = utf8Encode(input)
+  const sequences = splitBytes(bytes, 0x26)
+  const output: Tuple[] = []
+  for (const seq of sequences) {
+    if (seq.length == 0) continue
+    let nameBytes: Uint8Array, valueBytes: Uint8Array
+    const eq = seq.indexOf(0x3d)
+    if (eq == -1) {
+      nameBytes = seq
+      valueBytes = new Uint8Array(0)
+    } else {
+      nameBytes = seq.slice(0, eq)
+      valueBytes = seq.slice(eq + 1)
+    }
+    nameBytes = replacePlus(nameBytes)
+    valueBytes = replacePlus(valueBytes)
+    const nameStr = utf8Decode(percentDecodeBytes(nameBytes))
+    const valueStr = utf8Decode(percentDecodeBytes(valueBytes))
+    output.push([nameStr, valueStr])
+  }
+  return output
+}
+const splitBytes = (bytes: Uint8Array, sep: number): Uint8Array[] => {
+  const out: Uint8Array[] = []
+  let start = 0
+  for (let i = 0; i < bytes.length; i++) {
+    if (bytes[i] == sep) {
+      out.push(bytes.slice(start, i))
+      start = i + 1
+    }
+  }
+  out.push(bytes.slice(start))
+  return out
+}
+const replacePlus = (bytes: Uint8Array): Uint8Array => {
+  return Uint8Array.from(bytes.map(b => (b == 0x2b ? 0x20 : b)))
+}
+const serializeFormList = (list: Tuple[]): string => {
+  let out = ''
+  let first = true
+  for (const [name, value] of list) {
+    if (!first) out += '&'
+    first = false
+    out += `${formPct(name)}=${formPct(value)}`
+  }
+  return out
+}
+const parseBase = (base: string | URL | undefined): URLRecord | null | undefined => {
+  if (base == null) return
+  if (typeof base == 'string') return basicURLParser(base)
+  return (base as any as _URL)._record
 }
 
 // ---- URLSearchParams ----
@@ -1126,56 +1185,6 @@ export class URLSearchParams {
   toString(): string {
     return serializeFormList(this._list)
   }
-}
-
-// application/x-www-form-urlencoded parser (operates on a string -> bytes).
-function parseFormString(input: string): Tuple[] {
-  const bytes = utf8Encode(input)
-  const sequences = splitBytes(bytes, 0x26)
-  const output: Tuple[] = []
-  for (const seq of sequences) {
-    if (seq.length == 0) continue
-    let nameBytes: Uint8Array, valueBytes: Uint8Array
-    const eq = seq.indexOf(0x3d)
-    if (eq == -1) {
-      nameBytes = seq
-      valueBytes = new Uint8Array(0)
-    } else {
-      nameBytes = seq.slice(0, eq)
-      valueBytes = seq.slice(eq + 1)
-    }
-    nameBytes = replacePlus(nameBytes)
-    valueBytes = replacePlus(valueBytes)
-    const nameStr = utf8Decode(percentDecodeBytes(nameBytes))
-    const valueStr = utf8Decode(percentDecodeBytes(valueBytes))
-    output.push([nameStr, valueStr])
-  }
-  return output
-}
-function splitBytes(bytes: Uint8Array, sep: number): Uint8Array[] {
-  const out: Uint8Array[] = []
-  let start = 0
-  for (let i = 0; i < bytes.length; i++) {
-    if (bytes[i] == sep) {
-      out.push(bytes.slice(start, i))
-      start = i + 1
-    }
-  }
-  out.push(bytes.slice(start))
-  return out
-}
-function replacePlus(bytes: Uint8Array): Uint8Array {
-  return Uint8Array.from(bytes.map(b => (b == 0x2b ? 0x20 : b)))
-}
-function serializeFormList(list: Tuple[]): string {
-  let out = ''
-  let first = true
-  for (const [name, value] of list) {
-    if (!first) out += '&'
-    first = false
-    out += `${formPct(name)}=${formPct(value)}`
-  }
-  return out
 }
 
 // ---- URL ----
@@ -1360,10 +1369,4 @@ export class URL {
     if (base != null && baseRec == null) return false
     return basicURLParser(url, baseRec) != null
   }
-}
-
-function parseBase(base: string | URL | undefined): URLRecord | null | undefined {
-  if (base == null) return
-  if (typeof base == 'string') return basicURLParser(base)
-  return (base as any as _URL)._record
 }

@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { URL as NodeURL } from 'node:url'
-import { URL as MyURL } from '../src/index'
+import { URL as MyURL } from '../dist/index.mjs'
 
 // Cross-check against Node's built-in URL (which implements the WHATWG URL
 // Standard) to guard against regressions in spec compliance.

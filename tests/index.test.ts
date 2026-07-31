@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { URL, URLSearchParams } from '../src/index'
+import { URL, URLSearchParams } from '../dist/index.mjs'
 
 describe('URL parsing & serialization', () => {
   it('parses a basic special URL', () => {
