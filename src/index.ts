@@ -256,7 +256,7 @@ const endsInNumber = (input: string): boolean => {
   const parts = input.split('.')
   if (parts[parts.length - 1] == '') parts.pop()
   const last = parts[parts.length - 1]
-  if (last == undefined) return false
+  if (last == null) return false
   if (last != '' && /^[0-9]+$/.test(last)) return true
   return parseIPv4Number(last) != null
 }
@@ -361,7 +361,7 @@ const parseHost = (input: string, isOpaque: boolean): Host | null | undefined =>
   }
   if (isOpaque) {
     const o = parseOpaqueHost(input)
-    return o == null ? undefined : { $kind: HK.opaque, $value: o }
+    return o == null ? null : { $kind: HK.opaque, $value: o }
   }
   if (input == '') return
   // percent-encoded byte in domain is a validation error but allowed:
@@ -828,7 +828,7 @@ const basicURLParser = (
             if (
               !startsWithWindowsDriveLetter(remaining(pointer)) &&
               nativeArrayIsArray(base._path) &&
-              base._path[0] != undefined &&
+              base._path[0] != null &&
               isWindowsDriveLetter(base._path[0])
             ) {
               if (nativeArrayIsArray(url._path)) url._path.push(base._path[0])
@@ -1135,7 +1135,7 @@ export class URLSearchParams {
     return this._list.filter(x => x[0] == name).map(x => x[1])
   }
   has(name: string, value?: string): boolean {
-    return value !== undefined
+    return value != null
       ? this._list.some(t => t[0] == name && t[1] == value)
       : this._list.some(t => t[0] == name)
   }
@@ -1188,19 +1188,11 @@ export class URLSearchParams {
 type _URL = typeof URL & { _record: URLRecord; _urlSearchParams: URLSearchParams }
 export class URL {
   private _record: URLRecord
-  // _scheme: string = ''
-  // _username: string = ''
-  // _password: string = ''
-  // _host: Host = { $kind: HK.none }
-  // _port: number | null = null
-  // _path: string[] | string = '' // string => opaque path
-  // _query: string | null = ''
-  // _fragment: string | null = ''
   private _urlSearchParams: URLSearchParams
 
   constructor(url: string | URL, base?: string | URL) {
     const baseRec = parseBase(base)
-    if (baseRec == null && base != undefined) throw new TypeError('Invalid base URL')
+    if (baseRec == null && base != null) throw new TypeError('Invalid base URL')
     const parsed = basicURLParser(url as string, baseRec)
     if (parsed == null) throw new TypeError('Invalid URL')
     this._record = parsed
@@ -1349,21 +1341,15 @@ export class URL {
     return this.href
   }
 
-  static parse(url: string, base?: string | URL): URL | null {
-    const baseRec = parseBase(base)
-    if (base != null && baseRec == null) return null
-    const parsed = basicURLParser(url, baseRec)
-    if (parsed == null) return null
-    const result = Object.create(URL.prototype) as URL
-    result._record = parsed
-    result._urlSearchParams = new URLSearchParams(parsed._query ?? '')
-    ;(result._urlSearchParams as any as _URLSearchParams)._url = result
-    return result
+  static parse(url: string | URL, base?: string | URL): URL | null {
+    try {
+      return new URL(url, base)
+    } catch {
+      return null
+    }
   }
 
   static canParse(url: string, base?: string | URL): boolean {
-    const baseRec = parseBase(base)
-    if (base != null && baseRec == null) return false
-    return basicURLParser(url, baseRec) != null
+    return URL.parse(url, base) != null
   }
 }
