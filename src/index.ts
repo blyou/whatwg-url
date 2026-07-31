@@ -16,10 +16,66 @@ const nativeMathFloor = nativeMath.floor
 const nativeMathPow = nativeMath.pow
 const nativeUint8Array = Uint8Array
 
-const encoder = new TextEncoder()
-const decoder = new TextDecoder('utf8', { fatal: false })
-const utf8Encode = (s: string): Uint8Array => encoder.encode(s)
-const utf8Decode = (b: Uint8Array): string => decoder.decode(b)
+// Pure-JS UTF-8 codec (no TextEncoder/TextDecoder) so this works in runtimes
+// that lack those globals (e.g. mini-program environments). The decode is
+// lenient, matching `new TextDecoder('utf-8', { fatal: false })`.
+const utf8Encode = (s: string): Uint8Array => {
+  const out: number[] = []
+  for (const ch of s) {
+    const cp = ch.codePointAt(0)!
+    if (cp < 0x80) out.push(cp)
+    else if (cp < 0x800) out.push(0xc0 | (cp >> 6), 0x80 | (cp & 0x3f))
+    else if (cp < 0x10000)
+      out.push(0xe0 | (cp >> 12), 0x80 | ((cp >> 6) & 0x3f), 0x80 | (cp & 0x3f))
+    else
+      out.push(
+        0xf0 | (cp >> 18),
+        0x80 | ((cp >> 12) & 0x3f),
+        0x80 | ((cp >> 6) & 0x3f),
+        0x80 | (cp & 0x3f),
+      )
+  }
+  return nativeUint8Array.from(out)
+}
+const utf8Decode = (b: Uint8Array): string => {
+  let s = ''
+  let i = 0
+  while (i < b.length) {
+    const c = b[i++]
+    if (c < 0x80) s += nativeString.fromCodePoint(c)
+    else if (c < 0xc0)
+      s += '\uFFFD' // invalid continuation / lone byte
+    else if (c < 0xe0) {
+      const c2 = i < b.length ? b[i++] : 0
+      s +=
+        i > 0 && (c2 & 0xc0) === 0x80
+          ? nativeString.fromCodePoint(((c & 0x1f) << 6) | (c2 & 0x3f))
+          : '\uFFFD'
+    } else if (c < 0xf0) {
+      const c2 = i < b.length ? b[i++] : 0
+      const c3 = i < b.length ? b[i++] : 0
+      if ((c2 & 0xc0) === 0x80 && (c3 & 0xc0) === 0x80)
+        s += nativeString.fromCodePoint(((c & 0x0f) << 12) | ((c2 & 0x3f) << 6) | (c3 & 0x3f))
+      else {
+        s += '\uFFFD'
+        i--
+      } // back off consumed bytes on malformed sequence
+    } else if (c < 0xf8) {
+      const c2 = i < b.length ? b[i++] : 0
+      const c3 = i < b.length ? b[i++] : 0
+      const c4 = i < b.length ? b[i++] : 0
+      if ((c2 & 0xc0) === 0x80 && (c3 & 0xc0) === 0x80 && (c4 & 0xc0) === 0x80) {
+        s += nativeString.fromCodePoint(
+          ((c & 0x07) << 18) | ((c2 & 0x3f) << 12) | ((c3 & 0x3f) << 6) | (c4 & 0x3f),
+        )
+      } else {
+        s += '\uFFFD'
+        i--
+      }
+    } else s += '\uFFFD' // invalid leading byte (>= 0xf8)
+  }
+  return s
+}
 
 const isAlpha = (cp: number) => (cp >= 0x41 && cp <= 0x5a) || (cp >= 0x61 && cp <= 0x7a)
 const isDigit = (cp: number) => cp >= 0x30 && cp <= 0x39
