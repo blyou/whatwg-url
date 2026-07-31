@@ -373,14 +373,14 @@ function parseHost(input: string, isOpaque: boolean): Host | null | undefined {
 
 // ---- URL record ----
 interface URLRecord {
-  $scheme: string
-  $username: string
-  $password: string
-  $host: Host
-  $port: number | null
-  $path: string[] | string // string => opaque path
-  $query: string | null
-  $fragment: string | null
+  _scheme: string
+  _username: string
+  _password: string
+  _host: Host
+  _port: number | null
+  _path: string[] | string // string => opaque path
+  _query: string | null
+  _fragment: string | null
 }
 
 const DEFAULT_PORTS: Record<string, number> = {
@@ -398,7 +398,7 @@ function defaultPort(scheme: string): number | undefined {
   return DEFAULT_PORTS[scheme]
 }
 function cannotHaveUserPwdPort(rec: URLRecord): boolean {
-  return rec.$host.$kind == HK.none || rec.$host.$kind == HK.empty || rec.$scheme == 'file'
+  return rec._host.$kind == HK.none || rec._host.$kind == HK.empty || rec._scheme == 'file'
 }
 
 function serializeIPv4(n: number): string {
@@ -450,9 +450,9 @@ function serializeHost(host: Host): string {
 }
 
 function shortenPath(rec: URLRecord): void {
-  if (rec.$path === '' || !nativeArrayIsArray(rec.$path)) return
-  if (rec.$scheme == 'file' && rec.$path.length == 1 && isWindowsDriveLetter(rec.$path[0])) return
-  if (rec.$path.length > 0) rec.$path.pop()
+  if (rec._path === '' || !nativeArrayIsArray(rec._path)) return
+  if (rec._scheme == 'file' && rec._path.length == 1 && isWindowsDriveLetter(rec._path[0])) return
+  if (rec._path.length > 0) rec._path.pop()
 }
 
 // Windows drive letter: two code points, first ASCII alpha, second ':' or '|'.
@@ -507,14 +507,14 @@ function basicURLParser(
   input = nativeString(input)
   if (url == null) {
     const rec: URLRecord = {
-      $scheme: '',
-      $username: '',
-      $password: '',
-      $host: { $kind: HK.none },
-      $port: null,
-      $path: [],
-      $query: null,
-      $fragment: null,
+      _scheme: '',
+      _username: '',
+      _password: '',
+      _host: { $kind: HK.none },
+      _port: null,
+      _path: [],
+      _query: null,
+      _fragment: null,
     }
     const cps = [...input]
     let start = 0,
@@ -543,8 +543,8 @@ function basicURLParser(
     passwordTokenSeen = false
   let pointer = 0
 
-  const FS = (x: number) => isSpecial(url.$scheme) && x == 0x5c
-  const opaque = () => !isSpecial(url.$scheme) && url.$scheme != ''
+  const FS = (x: number) => isSpecial(url._scheme) && x == 0x5c
+  const opaque = () => !isSpecial(url._scheme) && url._scheme != ''
 
   while (true) {
     const c = pointer >= len ? null : cps[pointer]
@@ -566,31 +566,31 @@ function basicURLParser(
           buffer += nativeStringFromCodePoint(cp).toLowerCase()
         } else if (cp == 0x3a) {
           if (stateOverride != null) {
-            if (isSpecial(url.$scheme) && !isSpecial(buffer)) return url // no-op
-            if (!isSpecial(url.$scheme) && isSpecial(buffer)) return url
+            if (isSpecial(url._scheme) && !isSpecial(buffer)) return url // no-op
+            if (!isSpecial(url._scheme) && isSpecial(buffer)) return url
             if (
-              (url.$username != '' || url.$password != '' || url.$port != null) &&
+              (url._username != '' || url._password != '' || url._port != null) &&
               buffer == 'file'
             )
               return url
-            if (url.$scheme == 'file' && url.$host.$kind == HK.empty) return url
+            if (url._scheme == 'file' && url._host.$kind == HK.empty) return url
           }
-          url.$scheme = buffer
+          url._scheme = buffer
           if (stateOverride != null) {
-            if (url.$port == defaultPort(url.$scheme)) url.$port = null
+            if (url._port == defaultPort(url._scheme)) url._port = null
             return url
           }
           buffer = ''
-          if (url.$scheme == 'file') {
+          if (url._scheme == 'file') {
             state = S.file
-          } else if (isSpecial(url.$scheme)) {
-            if (base != null && base.$scheme == url.$scheme) state = S.specialRelOrAuth
+          } else if (isSpecial(url._scheme)) {
+            if (base != null && base._scheme == url._scheme) state = S.specialRelOrAuth
             else state = S.specialAuthSlashes
           } else if (cps[pointer + 1] == '/') {
             state = S.pathOrAuth
             pointer++
           } else {
-            url.$path = ''
+            url._path = ''
             state = S.opaquePath
           }
         } else if (stateOverride == null) {
@@ -601,15 +601,15 @@ function basicURLParser(
         break
       }
       case S.noScheme: {
-        const baseOpaque = base != null && !nativeArrayIsArray(base.$path)
+        const baseOpaque = base != null && !nativeArrayIsArray(base._path)
         if (base == null || (baseOpaque && cp != 0x23)) return
         if (baseOpaque && cp == 0x23) {
-          url.$scheme = base.$scheme
-          url.$path = base.$path
-          url.$query = base.$query
-          url.$fragment = ''
+          url._scheme = base._scheme
+          url._path = base._path
+          url._query = base._query
+          url._fragment = ''
           state = S.fragment
-        } else if (base.$scheme != 'file') {
+        } else if (base._scheme != 'file') {
           state = S.relative
           pointer--
         } else {
@@ -637,25 +637,25 @@ function basicURLParser(
         break
       }
       case S.relative: {
-        url.$scheme = base!.$scheme
+        url._scheme = base!._scheme
         if (cp == 0x2f) state = S.relativeSlash
         else if (FS(cp)) {
           /* validation error */ state = S.relativeSlash
         } else {
-          url.$username = base!.$username
-          url.$password = base!.$password
-          url.$host = base!.$host
-          url.$port = base!.$port
-          url.$path = nativeArrayIsArray(base!.$path) ? [...base!.$path] : []
-          url.$query = base!.$query
+          url._username = base!._username
+          url._password = base!._password
+          url._host = base!._host
+          url._port = base!._port
+          url._path = nativeArrayIsArray(base!._path) ? [...base!._path] : []
+          url._query = base!._query
           if (cp == 0x3f) {
-            url.$query = ''
+            url._query = ''
             state = S.query
           } else if (cp == 0x23) {
-            url.$fragment = ''
+            url._fragment = ''
             state = S.fragment
           } else if (c != null) {
-            url.$query = null
+            url._query = null
             shortenPath(url)
             state = S.path
             pointer--
@@ -664,14 +664,14 @@ function basicURLParser(
         break
       }
       case S.relativeSlash: {
-        if (isSpecial(url.$scheme) && (cp == 0x2f || FS(cp))) {
+        if (isSpecial(url._scheme) && (cp == 0x2f || FS(cp))) {
           state = S.specialAuthIgnoreSlashes
         } else if (cp == 0x2f) state = S.authority
         else {
-          url.$username = base!.$username
-          url.$password = base!.$password
-          url.$host = base!.$host
-          url.$port = base!.$port
+          url._username = base!._username
+          url._password = base!._password
+          url._host = base!._host
+          url._port = base!._port
           state = S.path
           pointer--
         }
@@ -704,8 +704,8 @@ function basicURLParser(
               passwordTokenSeen = true
               continue
             }
-            if (passwordTokenSeen) url.$password += utf8Pct(ch, inUser)
-            else url.$username += utf8Pct(ch, inUser)
+            if (passwordTokenSeen) url._password += utf8Pct(ch, inUser)
+            else url._username += utf8Pct(ch, inUser)
           }
           buffer = ''
         } else if (c == null || cp == 0x2f || cp == 0x3f || cp == 0x23 || FS(cp)) {
@@ -718,7 +718,7 @@ function basicURLParser(
       }
       case S.host:
       case S.hostname: {
-        if (stateOverride == S.host && url.$scheme == 'file') {
+        if (stateOverride == S.host && url._scheme == 'file') {
           pointer--
           state = S.fileHost
           break
@@ -728,30 +728,30 @@ function basicURLParser(
           if (stateOverride == S.hostname) return
           const h = parseHost(buffer, opaque())
           if (h == null) return
-          url.$host = h
+          url._host = h
           buffer = ''
           state = S.port
         } else if (c == null || cp == 0x2f || cp == 0x3f || cp == 0x23 || FS(cp)) {
           pointer--
-          if (url.$host.$kind == HK.none && buffer == '') {
-            if (base != null && base.$host.$kind != HK.none) {
+          if (url._host.$kind == HK.none && buffer == '') {
+            if (base != null && base._host.$kind != HK.none) {
               // host elided; inherit from base at the end of parsing
               buffer = ''
               state = S.pathStart
               if (stateOverride != null) return url
               break
             }
-            if (!isSpecial(url.$scheme) || url.$scheme == 'file') return
+            if (!isSpecial(url._scheme) || url._scheme == 'file') return
           }
           if (
             stateOverride != null &&
             buffer == '' &&
-            (url.$username != '' || url.$password != '' || url.$port != null)
+            (url._username != '' || url._password != '' || url._port != null)
           )
             return
           const h = parseHost(buffer, opaque())
           if (h == null) return
-          url.$host = h
+          url._host = h
           buffer = ''
           state = S.pathStart
           if (stateOverride != null) return url
@@ -775,7 +775,7 @@ function basicURLParser(
           if (buffer != '') {
             const port = nativeParseInt(buffer, 10)
             if (nativeNumberIsNaN(port) || port > 65535) return // out of range
-            url.$port = port == defaultPort(url.$scheme) ? null : port
+            url._port = port == defaultPort(url._scheme) ? null : port
             buffer = ''
             if (stateOverride != null) return url
           } else if (stateOverride != null) return
@@ -785,25 +785,25 @@ function basicURLParser(
         break
       }
       case S.file: {
-        url.$scheme = 'file'
-        url.$host = { $kind: HK.empty }
+        url._scheme = 'file'
+        url._host = { $kind: HK.empty }
         if (cp == 0x2f || FS(cp)) {
           state = S.fileSlash
-        } else if (base != null && base.$scheme == 'file') {
-          url.$host = base.$host
-          url.$path = nativeArrayIsArray(base.$path) ? [...base.$path] : []
-          url.$query = base.$query
+        } else if (base != null && base._scheme == 'file') {
+          url._host = base._host
+          url._path = nativeArrayIsArray(base._path) ? [...base._path] : []
+          url._query = base._query
           if (cp == 0x3f) {
-            url.$query = ''
+            url._query = ''
             state = S.query
           } else if (cp == 0x23) {
-            url.$fragment = ''
+            url._fragment = ''
             state = S.fragment
           } else if (c != null) {
-            url.$query = null
+            url._query = null
             if (!startsWithWindowsDriveLetter(remaining(pointer))) shortenPath(url)
             else {
-              /* validation error */ url.$path = []
+              /* validation error */ url._path = []
             }
             state = S.path
             pointer--
@@ -818,15 +818,15 @@ function basicURLParser(
         if (cp == 0x2f || FS(cp)) {
           state = S.fileHost
         } else {
-          if (base != null && base.$scheme == 'file') {
-            url.$host = base.$host
+          if (base != null && base._scheme == 'file') {
+            url._host = base._host
             if (
               !startsWithWindowsDriveLetter(remaining(pointer)) &&
-              nativeArrayIsArray(base.$path) &&
-              base.$path[0] != undefined &&
-              isWindowsDriveLetter(base.$path[0])
+              nativeArrayIsArray(base._path) &&
+              base._path[0] != undefined &&
+              isWindowsDriveLetter(base._path[0])
             ) {
-              if (nativeArrayIsArray(url.$path)) url.$path.push(base.$path[0])
+              if (nativeArrayIsArray(url._path)) url._path.push(base._path[0])
             }
           }
           state = S.path
@@ -840,14 +840,14 @@ function basicURLParser(
           if (stateOverride == null && isWindowsDriveLetter(buffer)) {
             /* validation error */ state = S.path
           } else if (buffer == '') {
-            url.$host = { $kind: HK.empty }
+            url._host = { $kind: HK.empty }
             if (stateOverride != null) return url
             state = S.pathStart
           } else {
             let h = parseHost(buffer, false)
             if (h == null) return
             if (h.$kind == HK.domain && h.$value == 'localhost') h = { $kind: HK.empty }
-            url.$host = h
+            url._host = h
             if (stateOverride != null) return url
             buffer = ''
             state = S.pathStart
@@ -856,20 +856,20 @@ function basicURLParser(
         break
       }
       case S.pathStart: {
-        if (isSpecial(url.$scheme)) {
+        if (isSpecial(url._scheme)) {
           state = S.path
           if (cp != 0x2f && !FS(cp)) pointer--
         } else if (stateOverride == null && cp == 0x3f) {
-          url.$query = ''
+          url._query = ''
           state = S.query
         } else if (stateOverride == null && cp == 0x23) {
-          url.$fragment = ''
+          url._fragment = ''
           state = S.fragment
         } else if (c != null) {
           state = S.path
           if (cp != 0x2f) pointer--
-        } else if (stateOverride != null && url.$host.$kind == HK.none) {
-          url.$path = ['']
+        } else if (stateOverride != null && url._host.$kind == HK.none) {
+          url._path = ['']
         }
         break
       }
@@ -883,29 +883,29 @@ function basicURLParser(
           if (buffer == '..') {
             shortenPath(url)
             if (cp != 0x2f && !FS(cp)) {
-              if (nativeArrayIsArray(url.$path)) url.$path.push('')
+              if (nativeArrayIsArray(url._path)) url._path.push('')
             }
           } else if (buffer == '.') {
             if (cp != 0x2f && !FS(cp)) {
-              if (nativeArrayIsArray(url.$path)) url.$path.push('')
+              if (nativeArrayIsArray(url._path)) url._path.push('')
             }
           } else {
             if (
-              url.$scheme == 'file' &&
-              nativeArrayIsArray(url.$path) &&
-              url.$path.length == 0 &&
+              url._scheme == 'file' &&
+              nativeArrayIsArray(url._path) &&
+              url._path.length == 0 &&
               isWindowsDriveLetter(buffer)
             ) {
               buffer = `${buffer[0]}:${buffer.slice(2)}`
             }
-            if (nativeArrayIsArray(url.$path)) url.$path.push(buffer)
+            if (nativeArrayIsArray(url._path)) url._path.push(buffer)
           }
           buffer = ''
           if (cp == 0x3f) {
-            url.$query = ''
+            url._query = ''
             state = S.query
           } else if (cp == 0x23) {
-            url.$fragment = ''
+            url._fragment = ''
             state = S.fragment
           }
         } else {
@@ -915,12 +915,12 @@ function basicURLParser(
       }
       case S.opaquePath: {
         if (cp == 0x3f) {
-          url.$path = buffer
-          url.$query = ''
+          url._path = buffer
+          url._query = ''
           state = S.query
         } else if (cp == 0x23) {
-          url.$path = buffer
-          url.$fragment = ''
+          url._path = buffer
+          url._fragment = ''
           state = S.fragment
         } else if (cp == 0x20) {
           const nxt = cps.slice(pointer + 1).join('')
@@ -930,24 +930,24 @@ function basicURLParser(
           buffer += utf8Pct(c!, inC0)
         }
         if (c == null) {
-          url.$path = buffer
+          url._path = buffer
         }
         break
       }
       case S.query: {
-        const set = isSpecial(url.$scheme) ? inSQuery : inQuery
+        const set = isSpecial(url._scheme) ? inSQuery : inQuery
         if (stateOverride == null && cp == 0x23) {
-          url.$query = (url.$query ?? '') + utf8Pct(buffer, set)
+          url._query = (url._query ?? '') + utf8Pct(buffer, set)
           buffer = ''
-          url.$fragment = ''
+          url._fragment = ''
           state = S.fragment
         } else if (c != null && cp != 0x23) {
           buffer += c
         } else {
-          url.$query = (url.$query ?? '') + utf8Pct(buffer, set)
+          url._query = (url._query ?? '') + utf8Pct(buffer, set)
           buffer = ''
           if (cp == 0x23) {
-            url.$fragment = ''
+            url._fragment = ''
             state = S.fragment
           }
         }
@@ -955,7 +955,7 @@ function basicURLParser(
       }
       case S.fragment: {
         if (c != null) {
-          url.$fragment = (url.$fragment ?? '') + utf8Pct(c!, inFrag)
+          url._fragment = (url._fragment ?? '') + utf8Pct(c!, inFrag)
         }
         break
       }
@@ -967,12 +967,12 @@ function basicURLParser(
 
   // Inherit host/username/password/port (and opaque path) from base when the
   // authority was elided, per WHATWG "If url's host is null" step.
-  if (url.$host.$kind == HK.none && base != null && base.$host.$kind != HK.none) {
-    url.$username = base.$username
-    url.$password = base.$password
-    url.$host = base.$host
-    url.$port = base.$port
-    if (!nativeArrayIsArray(url.$path) && base.$path !== '') url.$path = base.$path
+  if (url._host.$kind == HK.none && base != null && base._host.$kind != HK.none) {
+    url._username = base._username
+    url._password = base._password
+    url._host = base._host
+    url._port = base._port
+    if (!nativeArrayIsArray(url._path) && base._path !== '') url._path = base._path
   }
 
   return url
@@ -980,20 +980,20 @@ function basicURLParser(
 
 // ---- serialization ----
 function serializePath(url: URLRecord): string {
-  if (!nativeArrayIsArray(url.$path)) return url.$path // opaque
+  if (!nativeArrayIsArray(url._path)) return url._path // opaque
   let out = ''
-  for (const seg of url.$path) out += `/${seg}`
+  for (const seg of url._path) out += `/${seg}`
   return out
 }
 
 function serializeOrigin(rec: URLRecord): string | null | undefined {
-  switch (rec.$scheme) {
+  switch (rec._scheme) {
     case 'blob': {
-      if (rec.$host.$kind != HK.none) {
+      if (rec._host.$kind != HK.none) {
         const inner = basicURLParser(serializePath(rec))
         if (
           inner != null &&
-          (inner.$scheme == 'http' || inner.$scheme == 'https' || inner.$scheme == 'file')
+          (inner._scheme == 'http' || inner._scheme == 'https' || inner._scheme == 'file')
         ) {
           return serializeOrigin(inner)
         }
@@ -1005,8 +1005,8 @@ function serializeOrigin(rec: URLRecord): string | null | undefined {
     case 'https':
     case 'ws':
     case 'wss': {
-      const host = serializeHost(rec.$host)
-      return `${rec.$scheme}://${host}${rec.$port != null ? `:${rec.$port}` : ''}`
+      const host = serializeHost(rec._host)
+      return `${rec._scheme}://${host}${rec._port != null ? `:${rec._port}` : ''}`
     }
     case 'file':
       return 'file://'
@@ -1052,7 +1052,7 @@ export class URLSearchParams {
   private update(): void {
     if (this._url == null) return
     const s = serializeFormList(this._list)
-    ;(this._url as any as _URL)._record.$query = s
+    ;(this._url as any as _URL)._record._query = s
   }
 
   get size(): number {
@@ -1182,14 +1182,14 @@ function serializeFormList(list: Tuple[]): string {
 type _URL = typeof URL & { _record: URLRecord; _urlSearchParams: URLSearchParams }
 export class URL {
   private _record: URLRecord
-  // $scheme: string = ''
-  // $username: string = ''
-  // $password: string = ''
-  // $host: Host = { $kind: HK.none }
-  // $port: number | null = null
-  // $path: string[] | string = '' // string => opaque path
-  // $query: string | null = ''
-  // $fragment: string | null = ''
+  // _scheme: string = ''
+  // _username: string = ''
+  // _password: string = ''
+  // _host: Host = { $kind: HK.none }
+  // _port: number | null = null
+  // _path: string[] | string = '' // string => opaque path
+  // _query: string | null = ''
+  // _fragment: string | null = ''
   private _urlSearchParams: URLSearchParams
 
   constructor(url: string | URL, base?: string | URL) {
@@ -1198,42 +1198,42 @@ export class URL {
     const parsed = basicURLParser(url as string, baseRec)
     if (parsed == null) throw new TypeError('Invalid URL')
     this._record = parsed
-    this._urlSearchParams = new URLSearchParams(this._record.$query ?? '')
+    this._urlSearchParams = new URLSearchParams(this._record._query ?? '')
     ;(this._urlSearchParams as any as _URLSearchParams)._url = this
   }
 
   get href(): string {
     const rec = this._record
-    let out = `${rec.$scheme}:`
-    if (rec.$host.$kind != HK.none) {
+    let out = `${rec._scheme}:`
+    if (rec._host.$kind != HK.none) {
       out += '//'
-      if (rec.$username != '' || rec.$password != '') {
-        out += rec.$username
-        if (rec.$password != '') out += `:${rec.$password}`
+      if (rec._username != '' || rec._password != '') {
+        out += rec._username
+        if (rec._password != '') out += `:${rec._password}`
         out += '@'
       }
-      out += serializeHost(rec.$host)
-      if (rec.$port != null) out += `:${rec.$port}`
+      out += serializeHost(rec._host)
+      if (rec._port != null) out += `:${rec._port}`
     }
     // if host null, not opaque, path size>1 and path[0]=='' => append "/."
     if (
-      rec.$host.$kind == HK.none &&
-      nativeArrayIsArray(rec.$path) &&
-      rec.$path.length > 1 &&
-      rec.$path[0] == ''
+      rec._host.$kind == HK.none &&
+      nativeArrayIsArray(rec._path) &&
+      rec._path.length > 1 &&
+      rec._path[0] == ''
     ) {
       out += '/.'
     }
     out += serializePath(rec)
-    if (rec.$query != null) out += `?${rec.$query}`
-    if (rec.$fragment != null) out += `#${rec.$fragment}`
+    if (rec._query != null) out += `?${rec._query}`
+    if (rec._fragment != null) out += `#${rec._fragment}`
     return out
   }
   set href(v: string) {
     const parsed = basicURLParser(v)
     if (parsed == null) throw new TypeError('Invalid URL')
     this._record = parsed
-    const q = this._record.$query
+    const q = this._record._query
     ;(this._urlSearchParams as any as _URLSearchParams)._list = q == null ? [] : parseFormString(q)
   }
 
@@ -1243,53 +1243,53 @@ export class URL {
   }
 
   get protocol(): string {
-    return `${this._record.$scheme}:`
+    return `${this._record._scheme}:`
   }
   set protocol(v: string) {
     basicURLParser(`${v}:`, null, this._record, S.schemeStart)
   }
 
   get username(): string {
-    return this._record.$username
+    return this._record._username
   }
   set username(v: string) {
     if (cannotHaveUserPwdPort(this._record)) return
-    this._record.$username = utf8Pct(v, inUser)
+    this._record._username = utf8Pct(v, inUser)
   }
   get password(): string {
-    return this._record.$password
+    return this._record._password
   }
   set password(v: string) {
     if (cannotHaveUserPwdPort(this._record)) return
-    this._record.$password = utf8Pct(v, inUser)
+    this._record._password = utf8Pct(v, inUser)
   }
 
   get host(): string {
-    if (this._record.$host.$kind == HK.none) return ''
-    if (this._record.$port == null) return serializeHost(this._record.$host)
-    return `${serializeHost(this._record.$host)}:${this._record.$port}`
+    if (this._record._host.$kind == HK.none) return ''
+    if (this._record._port == null) return serializeHost(this._record._host)
+    return `${serializeHost(this._record._host)}:${this._record._port}`
   }
   set host(v: string) {
-    if (!nativeArrayIsArray(this._record.$path)) return // opaque path
+    if (!nativeArrayIsArray(this._record._path)) return // opaque path
     basicURLParser(v, null, this._record, S.host)
   }
 
   get hostname(): string {
-    if (this._record.$host.$kind == HK.none) return ''
-    return serializeHost(this._record.$host)
+    if (this._record._host.$kind == HK.none) return ''
+    return serializeHost(this._record._host)
   }
   set hostname(v: string) {
-    if (!nativeArrayIsArray(this._record.$path)) return // opaque path
+    if (!nativeArrayIsArray(this._record._path)) return // opaque path
     basicURLParser(v, null, this._record, S.hostname)
   }
 
   get port(): string {
-    return this._record.$port == null ? '' : nativeString(this._record.$port)
+    return this._record._port == null ? '' : nativeString(this._record._port)
   }
   set port(v: string) {
     if (cannotHaveUserPwdPort(this._record)) return
     if (v == '') {
-      this._record.$port = null
+      this._record._port = null
       return
     }
     basicURLParser(v, null, this._record, S.port)
@@ -1299,22 +1299,22 @@ export class URL {
     return serializePath(this._record)
   }
   set pathname(v: string) {
-    if (!nativeArrayIsArray(this._record.$path)) return // opaque path
-    this._record.$path = []
+    if (!nativeArrayIsArray(this._record._path)) return // opaque path
+    this._record._path = []
     basicURLParser(v, null, this._record, S.pathStart)
   }
 
   get search(): string {
-    return this._record.$query == null || this._record.$query == '' ? '' : `?${this._record.$query}`
+    return this._record._query == null || this._record._query == '' ? '' : `?${this._record._query}`
   }
   set search(v: string) {
     if (v == '') {
-      this._record.$query = null
+      this._record._query = null
       ;(this._urlSearchParams as any as _URLSearchParams)._list = []
       return
     }
     const input = v[0] == '?' ? v.slice(1) : v
-    this._record.$query = ''
+    this._record._query = ''
     basicURLParser(input, null, this._record, S.query)
     ;(this._urlSearchParams as any as _URLSearchParams)._list = parseFormString(input)
   }
@@ -1324,15 +1324,15 @@ export class URL {
   }
 
   get hash(): string {
-    return this._record.$fragment ? `#${this._record.$fragment}` : ''
+    return this._record._fragment ? `#${this._record._fragment}` : ''
   }
   set hash(v: string) {
     if (v == '') {
-      this._record.$fragment = null
+      this._record._fragment = null
       return
     }
     const input = v[0] == '#' ? v.slice(1) : v
-    this._record.$fragment = ''
+    this._record._fragment = ''
     basicURLParser(input, null, this._record, S.fragment)
   }
 
@@ -1350,7 +1350,7 @@ export class URL {
     if (parsed == null) return null
     const result = Object.create(URL.prototype) as URL
     result._record = parsed
-    result._urlSearchParams = new URLSearchParams(parsed.$query ?? '')
+    result._urlSearchParams = new URLSearchParams(parsed._query ?? '')
     ;(result._urlSearchParams as any as _URLSearchParams)._url = result
     return result
   }
