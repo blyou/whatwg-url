@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest'
+// import { URL, URLSearchParams } from '../src/index.ts'
 import { URL, URLSearchParams } from '../dist/index.mjs'
 
 describe('URL parsing & serialization', () => {
@@ -30,7 +31,9 @@ describe('URL parsing & serialization', () => {
   it('URL.parse / URL.canParse return null / false instead of throwing', () => {
     expect(URL.parse('http://example.com/')).not.toBeNull()
     expect(URL.parse('http://')).toBeNull()
-    expect(URL.parse('http://', 'http://example.com/')).not.toBeNull()
+    // `http://` carries an explicit empty host, which is invalid (the base
+    // host is NOT inherited across the `//`), so it must fail to parse.
+    expect(URL.parse('http://', 'http://example.com/')).toBeNull()
     expect(URL.canParse('http://example.com/')).toBe(true)
     expect(URL.canParse('http://')).toBe(false)
     expect(URL.canParse('../x', 'http://example.com/')).toBe(true)

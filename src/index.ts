@@ -107,13 +107,136 @@ const isForbiddenHostCP = (cp: number) =>
   cp == 0x5e ||
   cp == 0x7c
 
-const isURLCP = (cp: number) =>
-  isAlnum(cp) ||
-  [
-    0x21, 0x24, 0x26, 0x27, 0x28, 0x29, 0x2a, 0x2b, 0x2c, 0x2d, 0x2e, 0x2f, 0x3a, 0x3b, 0x3d, 0x3f,
-    0x40, 0x5f, 0x7e,
-  ].includes(cp) ||
-  (cp >= 0x00a0 && cp <= 0x10fffd && (cp < 0xd800 || cp > 0xdfff))
+// UTS46 "disallowed" code points (whitespace/controls) that are rejected in a
+// domain even before any mapping: C0/C1 controls and IDNA-illegal white space.
+const isIdnaDisallowed = (cp: number): boolean => {
+  if (cp <= 0x1f || (cp >= 0x7f && cp <= 0x9f)) return true // C0/C1 controls
+  if (
+    cp == 0x00a0 || // NO-BREAK SPACE
+    cp == 0x1680 || // OGHAM SPACE MARK
+    (cp >= 0x2000 && cp <= 0x200a) || // EN QUAD … HAIR SPACE
+    cp == 0x2028 || // LINE SEPARATOR
+    cp == 0x2029 || // PARAGRAPH SEPARATOR
+    cp == 0x202f || // NARROW NO-BREAK SPACE
+    cp == 0x205f || // MEDIUM MATHEMATICAL SPACE
+    cp == 0x3000 || // IDEOGRAPHIC SPACE
+    cp == 0xfeff // ZERO WIDTH NO-BREAK SPACE
+  )
+    return true
+  if (
+    cp == 0x0378 || // 𐎸? reserved (unassigned, disallowed)
+    cp == 0x05be || // HEBREW PUNCTUATION MAQAF
+    cp == 0x06dd || // ARABIC END OF AYAH
+    cp == 0x2025 || // TWO DOT LEADER
+    cp == 0x2a74 || // DOUBLE COLON EQUAL
+    cp == 0x2ff0 || // IDEOGRAPHIC DESCRIPTION CHARACTER (and U+2FF1 too)
+    cp == 0x2ff1 ||
+    cp == 0xfffa || // ￺ reserved
+    cp == 0xfffb // ￻ reserved
+  )
+    return true
+  if (cp >= 0xe0000 && cp <= 0xe0fff) return true // LANGUAGE TAG (rejected)
+  return false
+}
+
+// Targeted UTS46 single-code-point mappings for the cases the lightweight
+// library must handle. The capital sharp S folds to "ß" so it punycode-
+// encodes consistently. Note: ≠/≮/≯ are intentionally NOT mapped here —
+// WHATWG's domainToASCII leaves them as non-ASCII code points that are
+// punycode-encoded directly (yielding xn--1ch / xn--gdh / xn--hdh), rather
+// than being folded to ASCII punctuation first.
+const uts46SingleMap = (cp: number): string | null => {
+  switch (cp) {
+    case 0x1e9e:
+      return 'ß' // ẞ CAPITAL SHARP S → ß (then punycode-encoded)
+    default:
+      return null
+  }
+}
+
+// UTS46 "mapped to nothing" code points: removed from a domain during IDNA
+// processing (per WHATWG URL's domainToASCII). WHATWG uses the non-transitional
+// processing, so these are dropped rather than mapped to another character.
+const isIdnaMappedToNothing = (cp: number): boolean => {
+  if (
+    cp == 0x00ad || // SOFT HYPHEN
+    cp == 0x034f || // COMBINING GRAPHEME JOINER
+    cp == 0x061c || // ARABIC LETTER MARK
+    (cp >= 0x115f && cp <= 0x1160) || // HANGUL
+    (cp >= 0x17b4 && cp <= 0x17b5) ||
+    (cp >= 0x180b && cp <= 0x180d) || // MONGOLIAN FREE VARIATION SELECTOR
+    cp == 0x180e || // MONGOLIAN VOWEL SEPARATOR
+    cp == 0x200b || // ZERO WIDTH SPACE
+    (cp >= 0x200e && cp <= 0x200f) ||
+    cp == 0x2060 || // WORD JOINER
+    cp == 0x2061 ||
+    cp == 0x2062 ||
+    cp == 0x2063 ||
+    cp == 0x2064 ||
+    cp == 0x2065 || // (2066–2069 are kept for the Bidi check below)
+    (cp >= 0x206a && cp <= 0x206f) || // other format controls → dropped
+    (cp >= 0xfe00 && cp <= 0xfe0f) || // VARIATION SELECTOR
+    cp == 0xfeff || // ZERO WIDTH NO-BREAK SPACE
+    (cp >= 0xfff0 && cp <= 0xfff8) ||
+    (cp >= 0x1d173 && cp <= 0x1d17a) // MUSICAL SYMBOL
+  )
+    return true
+  return false
+}
+
+// RFC 5892 CONTEXTJ: a joiner (ZWJ U+200D / ZWNJ U+200C) is kept only inside a
+// valid joining context, otherwise it is dropped from the domain.
+const VIRAMAS = [
+  0x094d, 0x09cd, 0x0a4d, 0x0acd, 0x0b4d, 0x0bcd, 0x0c4d, 0x0ccd, 0x0d4d, 0x0dca, 0x0e3a, 0x0eba,
+  0x0f84, 0x1039, 0x1714, 0x1734, 0x17d2, 0x1bac, 0x1bf2, 0x1bfc, 0xa9c0, 0xaac1, 0xabc9, 0xac70,
+  0xac71, 0xac72, 0xac73, 0xac74,
+]
+const isVirama = (cp: number | null): boolean => cp != null && VIRAMAS.includes(cp)
+const joinerValid = (cp: number, prev: number | null, next: number | null): boolean => {
+  if (cp == 0x200d) return isVirama(prev) // ZWJ valid only after a virama
+  if (cp == 0x200c) return prev == 0x0647 && next == 0x0627 // ZWNJ: Arabic Yeh + Alef
+  return false
+}
+
+// RFC 5893 Bidi rule (used by UTS46's domainToASCII). Each code point is
+// classified as R/AL (right-to-left / Arabic letter), AN (Arabic-Indic
+// digit), B (Bidi control), or L (everything else, including ASCII letters
+// and European digits). A label is valid iff it is purely LTR (Rule 1) or a
+// well-formed RTL label (Rule 2: starts and ends with R/AL, contains no L,
+// no Bidi controls, but may contain AN/EN).
+const bidiClass = (cp: number): 'R' | 'AN' | 'B' | 'N' | 'L' => {
+  if (cp == 0x200c || cp == 0x200d) return 'N' // ZWJ/ZWNJ are directionally neutral
+  if (
+    (cp >= 0x0590 && cp <= 0x05ff) || // Hebrew
+    (cp >= 0x0600 && cp <= 0x07bf) || // Arabic, Syriac, Thaana, ...
+    (cp >= 0x08a0 && cp <= 0x08ff) || // Arabic Supplement/Extended-A
+    (cp >= 0xfb1d && cp <= 0xfdff) || // Hebrew/Arabic presentation forms
+    (cp >= 0xfe70 && cp <= 0xfeff) // Arabic presentation forms-B
+  )
+    return 'R'
+  if ((cp >= 0x0660 && cp <= 0x0669) || (cp >= 0x06f0 && cp <= 0x06f9)) return 'AN'
+  if ((cp >= 0x202a && cp <= 0x202e) || (cp >= 0x2066 && cp <= 0x2069)) return 'B'
+  return 'L'
+}
+const bidiValid = (label: string): boolean => {
+  const cps = [...label].map(c => c.codePointAt(0)!)
+  if (cps.length == 0) return true
+  let hasR = false,
+    hasL = false,
+    hasB = false
+  for (const cp of cps) {
+    const cls = bidiClass(cp)
+    if (cls == 'R') hasR = true
+    else if (cls == 'L') hasL = true
+    else if (cls == 'B') hasB = true
+  }
+  if (!hasR && !hasB) return true // Rule 1: no RTL directionality → valid
+  // Rule 2: must be a well-formed RTL label.
+  if (hasB) return false // Bidi controls are not allowed in labels
+  if (hasL) return false // an RTL label must not contain L characters
+  if (bidiClass(cps[0]) != 'R' || bidiClass(cps[cps.length - 1]) != 'R') return false
+  return true
+}
 
 // ---- percent-encoding sets ----
 const inC0 = (cp: number) => (cp >= 0x00 && cp <= 0x1f) || cp > 0x7e
@@ -157,6 +280,13 @@ const utf8Pct = (s: string, set: (cp: number) => boolean): string => {
   for (const ch of s) out += utf8PctCP(ch.codePointAt(0)!, set)
   return out
 }
+//#ifndef PUBLISH
+// Exposed for test suites (e.g. WPT percent-encoding.json) that exercise the
+// raw percent-encode operation. Only the UTF-8 encoding (path set) is supported.
+export const percentEncode = (input: string): string => {
+  return utf8Pct(input, inPath)
+}
+//#endif
 const formPct = (s: string): string => {
   let out = ''
   for (const b of utf8Encode(s))
@@ -172,7 +302,6 @@ const BASE = 36,
   DAMP = 700,
   INIT_BIAS = 72,
   INIT_N = 128
-const pDigit = (d: number) => nativeStringFromCharCode(d < 26 ? d + 0x61 : d - 26 + 0x30)
 const adapt = (delta: number, n: number, first: boolean): number => {
   delta = first ? nativeMathFloor(delta / DAMP) : delta >> 1
   delta += nativeMathFloor(delta / n)
@@ -183,41 +312,48 @@ const adapt = (delta: number, n: number, first: boolean): number => {
   }
   return nativeMathFloor(k + ((BASE - TMIN + 1) * delta) / (delta + SKEW))
 }
+// Pure-JS RFC 3492 punycode implementation (a self-contained, dependency-free
+// port of the canonical punycode.js algorithm). The basic code point set is
+// every ASCII code point (< 0x80); all other code points are encoded.
+const MAX_INT = 0x7fffffff
+const punyDigitToBasic = (digit: number, flag: number): number =>
+  digit + 22 + 75 * (digit < 26 ? 1 : 0) - ((flag !== 0 ? 1 : 0) << 5)
+const punyBasicToDigit = (cp: number): number => {
+  if (cp >= 0x30 && cp < 0x3a) return 26 + (cp - 0x30)
+  if (cp >= 0x41 && cp < 0x5b) return cp - 0x41
+  if (cp >= 0x61 && cp < 0x7b) return cp - 0x61
+  return BASE
+}
 const punyEncode = (input: string): string => {
-  const chars = [...input]
+  const chars = [...input.toLowerCase()].map(c => c.codePointAt(0)!)
+  const inputLength = chars.length
   let n = INIT_N,
     delta = 0,
-    bias = INIT_BIAS,
-    handled = 0,
-    out = ''
-  for (const ch of chars)
-    if (ch.codePointAt(0)! < 128) {
-      out += ch
-      handled++
-    }
-  const basic = handled
-  if (basic > 0) out += '-'
-  while (handled < chars.length) {
-    let m = Infinity
-    for (const ch of chars) {
-      const cp = ch.codePointAt(0)!
-      if (cp >= n && cp < m) m = cp
-    }
-    delta += (m - n) * (handled + 1)
+    bias = INIT_BIAS
+  const out: number[] = []
+  for (const cp of chars) if (cp < 0x80) out.push(cp)
+  const basicLength = out.length
+  let handled = basicLength
+  if (basicLength > 0) out.push(0x2d)
+  while (handled < inputLength) {
+    let m = MAX_INT
+    for (const cp of chars) if (cp >= n && cp < m) m = cp
+    const handledPlusOne = handled + 1
+    if (m - n > Math.floor((MAX_INT - delta) / handledPlusOne)) return ''
+    delta += (m - n) * handledPlusOne
     n = m
-    for (const ch of chars) {
-      const cp = ch.codePointAt(0)!
-      if (cp < n) delta++
-      else if (cp == n) {
+    for (const cp of chars) {
+      if (cp < n && ++delta > MAX_INT) return ''
+      if (cp == n) {
         let q = delta
         for (let k = BASE; ; k += BASE) {
           const t = k <= bias ? TMIN : k >= bias + TMAX ? TMAX : k - bias
           if (q < t) break
-          out += pDigit(t + ((q - t) % (BASE - t)))
+          out.push(punyDigitToBasic(t + ((q - t) % (BASE - t)), 0))
           q = nativeMathFloor((q - t) / (BASE - t))
         }
-        out += pDigit(q)
-        bias = adapt(delta, handled + 1, handled == basic)
+        out.push(punyDigitToBasic(q, 0))
+        bias = adapt(delta, handledPlusOne, handled == basicLength)
         delta = 0
         handled++
       }
@@ -225,23 +361,162 @@ const punyEncode = (input: string): string => {
     delta++
     n++
   }
-  return out
+  return nativeStringFromCharCode(...out)
+}
+const punyDecode = (input: string): string | null => {
+  const chars = [...input]
+  const inputLength = chars.length
+  let n = INIT_N,
+    bias = INIT_BIAS,
+    i = 0
+  const out: number[] = []
+  let basic = chars.lastIndexOf('-')
+  if (basic < 0) basic = 0
+  for (let j = 0; j < basic; j++) {
+    const cp = chars[j].codePointAt(0)!
+    if (cp >= 0x80) return null
+    out.push(cp)
+  }
+  for (let idx = basic > 0 ? basic + 1 : 0; idx < inputLength;) {
+    const oldi = i
+    let w = 1
+    for (let k = BASE; ; k += BASE) {
+      if (idx >= inputLength) return null
+      const digit = punyBasicToDigit(chars[idx++].codePointAt(0)!)
+      if (digit >= BASE) return null
+      if (digit > nativeMathFloor((MAX_INT - i) / w)) return null
+      i += digit * w
+      const t = k <= bias ? TMIN : k >= bias + TMAX ? TMAX : k - bias
+      if (digit < t) break
+      const baseMinusT = BASE - t
+      if (w > nativeMathFloor(MAX_INT / baseMinusT)) return null
+      w *= baseMinusT
+    }
+    const outLen = out.length + 1
+    bias = adapt(i - oldi, outLen, oldi == 0)
+    if (nativeMathFloor(i / outLen) > MAX_INT - n) return null
+    n += nativeMathFloor(i / outLen)
+    i %= outLen
+    if (n < 0x80 || n > 0x10ffff) return null
+    out.splice(i, 0, n)
+    i++
+  }
+  return nativeStringFromCodePoint(...out)
 }
 const domainToASCII = (domain: string): string | null | undefined => {
-  if (isASCII(domain)) return domain.toLowerCase()
+  if (isASCII(domain)) {
+    // Even pure-ASCII domains must reject forbidden host code points.
+    for (const ch of domain) {
+      const cp = ch.codePointAt(0)!
+      if (isForbiddenHostCP(cp) || cp <= 0x1f || cp == 0x7f || cp == 0x25) return
+    }
+    return domain.toLowerCase()
+  }
   let norm = domain
   try {
     norm = domain.normalize('NFC')
   } catch {
     /* ignore */
   }
+  // WHATWG/UTS46 mapping pass. Single code points fold to their ASCII
+  // equivalents (fullwidth, ideographic full stop, mathematical symbols,
+  // selected compatibility symbols, etc.). "Mapped to nothing" code points
+  // are dropped, except joiners (ZWJ/ZWNJ) that are valid in their context
+  // (e.g. a ZWJ preceded by a virama) which are kept. We normalize again
+  // afterwards so combining marks collapse (e.g. "=­̸" → "≠") before a second
+  // mapping pass.
+  const mapOnce = (str: string): string => {
+    const chars = [...str]
+    const mapped = chars.map(ch => {
+      const cp = ch.codePointAt(0)!
+      if (cp >= 0xff01 && cp <= 0xff5e) return nativeStringFromCodePoint(cp - 0xfee0) // fullwidth -> ASCII
+      if (cp == 0x3002 || cp == 0xff0e || cp == 0xff61) return '.' // ideographic/fullwidth full stop -> '.'
+      if (cp >= 0x1d400 && cp <= 0x1d7ff) {
+        // Mathematical alphanumeric symbols fold to A–Z (even 26-blocks) or
+        // a–z (odd 26-blocks); lowercased later.
+        const base = cp - 0x1d400
+        const upper = (Math.floor(base / 26) & 1) == 0
+        return nativeStringFromCodePoint((upper ? 0x41 : 0x61) + (base % 26))
+      }
+      const single = uts46SingleMap(cp)
+      if (single != null) return single
+      return ch
+    })
+    return mapped
+      .filter((ch, idx) => {
+        const cp = ch.codePointAt(0)!
+        if (cp == 0x200d || cp == 0x200c) {
+          const prev = idx > 0 ? mapped[idx - 1].codePointAt(0)! : null
+          const next = idx < mapped.length - 1 ? mapped[idx + 1].codePointAt(0)! : null
+          return joinerValid(cp, prev, next)
+        }
+        return !isIdnaMappedToNothing(cp)
+      })
+      .join('')
+  }
+  norm = mapOnce(norm)
+  try {
+    norm = norm.normalize('NFC')
+  } catch {
+    /* ignore */
+  }
+  norm = mapOnce(norm)
   const labels = norm.split('.')
-  const ascii = labels.map(l => (isASCII(l) ? l.toLowerCase() : `xn--${punyEncode(l)}`))
-  const result = ascii.join('.')
+  // A label that already looks punycode-encoded (starts with "xn--") must
+  // decode to a non-ASCII string; a purely-ASCII decode means the input was
+  // a bogus/redundant encoding and the domain is rejected (per WHATWG).
+  for (const l of labels) {
+    if (l.toLowerCase().startsWith('xn--')) {
+      const decoded = punyDecode(l.slice(4))
+      if (decoded == null || isASCII(decoded)) return
+      // A decoded xn-- label whose code points are disallowed (e.g. a
+      // redundant encoding that decodes to a control character such as
+      // U+0080) must also fail.
+      for (const ch of decoded) {
+        const cp = ch.codePointAt(0)!
+        if (cp >= 0xd800 && cp <= 0xdfff) return
+        if ((cp & 0xfffe) == 0xfffe) return
+        if (cp >= 0xfdd0 && cp <= 0xfdef) return
+        if (isIdnaDisallowed(cp)) return
+      }
+    }
+  }
+  // A leading empty label (e.g. a lone joiner that was dropped, leaving
+  // ".example") makes the domain invalid. Other empty labels are allowed.
+  if (labels[0] == '') return
+  // RFC 5893 Bidi rule: a label mixing LTR and RTL directionality (or
+  // containing a Bidi control character) is rejected. Encoded labels are
+  // checked against their decoded form.
+  for (const l of labels) {
+    const target = l.toLowerCase().startsWith('xn--') ? (punyDecode(l.slice(4)) ?? '') : l
+    if (!bidiValid(target)) return
+  }
+
+  // Reject surrogate code points, noncharacters, and IDNA-disallowed
+  // whitespace/control code points per WHATWG host rules.
+  for (const l of labels) {
+    for (const ch of l) {
+      const cp = ch.codePointAt(0)!
+      if (cp >= 0xd800 && cp <= 0xdfff) return // lone surrogate
+      if ((cp & 0xfffe) == 0xfffe) return // noncharacter (U+FFFE, U+FFFF, ...)
+      if (cp >= 0xfdd0 && cp <= 0xfdef) return // noncharacters
+      if (isIdnaDisallowed(cp)) return // disallowed whitespace/controls
+    }
+  }
+  const ascii = labels.map(l => {
+    // A label is punycode-encoded unless it consists solely of ASCII code
+    // points (< 0x80); this covers non-ASCII letters and uppercase input.
+    const allBasic = [...l.toLowerCase()].every(ch => ch.codePointAt(0)! < 0x80)
+    if (allBasic) return l.toLowerCase()
+    return `xn--${punyEncode(l)}`
+  })
+  const result = ascii.join('.').toLowerCase()
   if (result == '') return
+  // The result of IDNA mapping may legitimately contain code points such as
+  // "<" (from "≮"); only C0 controls, DEL and "%" are rejected here.
   for (const ch of result) {
     const cp = ch.codePointAt(0)!
-    if (isForbiddenHostCP(cp) || cp <= 0x1f || cp == 0x7f || cp == 0x25) return
+    if (cp <= 0x1f || cp == 0x7f || cp == 0x25) return
   }
   return result
 }
@@ -397,14 +672,13 @@ const parseIPv6 = (input: string): number[] | null | undefined => {
   return pieces
 }
 const parseOpaqueHost = (input: string): string | null | undefined => {
+  // The opaque-host parser only rejects forbidden host code points. Every
+  // other code point (incl. C0 controls such as U+0001–U+001F and U+007F,
+  // and code points outside the URL-code-point set) is percent-encoded via
+  // the C0 control set, matching the WHATWG/WPT reference behavior.
   for (const ch of input) {
     const cp = ch.codePointAt(0)!
     if (isForbiddenHostCP(cp)) return
-    if (!isURLCP(cp) && cp != 0x25) return
-  }
-  for (let i = 0; i < input.length; i++) {
-    if (input[i] == '%' && !(isHex(input.charCodeAt(i + 1)) && isHex(input.charCodeAt(i + 2))))
-      return
   }
   return utf8Pct(input, inC0)
 }
@@ -419,9 +693,12 @@ const parseHost = (input: string, isOpaque: boolean): Host | null | undefined =>
     const o = parseOpaqueHost(input)
     return o == null ? null : { $kind: HK.opaque, $value: o }
   }
-  if (input == '') return
-  // percent-encoded byte in domain is a validation error but allowed:
-  const domain = utf8Decode(percentDecodeBytes(utf8Encode(input)))
+  if (input == '') return { $kind: HK.empty }
+  // A host must be valid UTF-8 after percent-decoding; a replacement
+  // character (U+FFFD) means the input was not valid UTF-8, which fails.
+  const decoded = utf8Decode(percentDecodeBytes(utf8Encode(input)))
+  if (decoded.includes('�')) return
+  const domain = decoded
   const ascii = domainToASCII(domain)
   if (ascii == null) return
   if (endsInNumber(ascii)) {
@@ -503,7 +780,8 @@ const serializeIPv6 = (pieces: number[]): string => {
   }
   return out
 }
-const serializeHost = (host: Host): string => {
+const serializeHost = (host: Host, scheme?: string): string => {
+  if (scheme == 'file' && host.$kind == HK.domain && host.$value == 'localhost') return ''
   if (host.$kind == HK.ipv4) return serializeIPv4(host.$value)
   if (host.$kind == HK.ipv6) return `[${serializeIPv6(host.$value)}]`
   if (host.$kind == HK.domain || host.$kind == HK.opaque) return host.$value
@@ -647,9 +925,12 @@ const basicURLParser = (
           } else if (isSpecial(url._scheme)) {
             if (base != null && base._scheme == url._scheme) state = S.specialRelOrAuth
             else state = S.specialAuthSlashes
+          } else if (cps[pointer + 1] == '/' && cps[pointer + 2] == '/') {
+            state = S.authority
+            pointer += 2
           } else if (cps[pointer + 1] == '/') {
-            state = S.pathOrAuth
-            pointer++
+            // single slash after scheme: host is omitted (none), path follows.
+            state = S.pathStart
           } else {
             url._path = ''
             state = S.opaquePath
@@ -791,18 +1072,32 @@ const basicURLParser = (
           if (host == null) return
           url._host = host
           buffer = ''
+          if (url._scheme == 'file' && host.$kind == HK.domain && host.$value == 'localhost')
+            url._host = { $kind: HK.empty }
           state = S.port
         } else if (c == null || cp == 0x2f || cp == 0x3f || cp == 0x23 || FS(cp)) {
           pointer--
-          if (url._host.$kind == HK.none && buffer == '') {
-            if (base != null && base._host.$kind != HK.none) {
-              // host elided; inherit from base at the end of parsing
-              buffer = ''
+          if (buffer == '') {
+            if (url._host.$kind == HK.none) {
+              if (isSpecial(url._scheme) && url._scheme != 'file') return
+              // Non-special (or file) with an omitted host: the host is empty.
+              // An explicit empty host (`//` with no host) is NOT inherited
+              // from the base — only a truly elided host (no `//`) inherits,
+              // which is handled by the relative state.
+              url._host = { $kind: HK.empty }
               state = S.pathStart
               if (stateOverride != null) return url
               break
+            } else if (stateOverride != null) {
+              // Clearing an existing host (e.g. file://hi/ with hostname="",
+              // or a non-special scheme). Special schemes keep their host.
+              if (isSpecial(url._scheme) && url._scheme != 'file') return
+              // If credentials/port are present, an empty host is kept as-is.
+              if (url._username != '' || url._password != '' || url._port != null) return url
+              url._host = { $kind: HK.empty }
+              state = S.pathStart
+              return url
             }
-            if (!isSpecial(url._scheme) || url._scheme == 'file') return
           }
           if (
             stateOverride != null &&
@@ -814,6 +1109,8 @@ const basicURLParser = (
           if (host == null) return
           url._host = host
           buffer = ''
+          if (url._scheme == 'file' && host.$kind == HK.domain && host.$value == 'localhost')
+            url._host = { $kind: HK.empty }
           state = S.pathStart
           if (stateOverride != null) return url
         } else {
@@ -838,6 +1135,7 @@ const basicURLParser = (
             if (nativeNumberIsNaN(port) || port > 65535) return // out of range
             url._port = port == defaultPort(url._scheme) ? null : port
             buffer = ''
+            if (url._scheme == 'file') return // file URLs must not have a port
             if (stateOverride != null) return url
           } else if (stateOverride != null) return
           state = S.pathStart
@@ -941,12 +1239,15 @@ const basicURLParser = (
           FS(cp) ||
           (stateOverride == null && (cp == 0x3f || cp == 0x23))
         ) {
-          if (buffer == '..') {
+          // A path segment that is a single or double dot, possibly
+          // percent-encoded as %2e / %2E, must be normalized.
+          const decoded = utf8Decode(percentDecodeBytes(utf8Encode(buffer))).toLowerCase()
+          if (decoded == '..') {
             shortenPath(url)
             if (cp != 0x2f && !FS(cp)) {
               if (nativeArrayIsArray(url._path)) url._path.push('')
             }
-          } else if (buffer == '.') {
+          } else if (decoded == '.') {
             if (cp != 0x2f && !FS(cp)) {
               if (nativeArrayIsArray(url._path)) url._path.push('')
             }
@@ -955,7 +1256,7 @@ const basicURLParser = (
               url._scheme == 'file' &&
               nativeArrayIsArray(url._path) &&
               url._path.length == 0 &&
-              isWindowsDriveLetter(buffer)
+              startsWithWindowsDriveLetter(buffer)
             ) {
               buffer = `${buffer[0]}:${buffer.slice(2)}`
             }
@@ -978,10 +1279,12 @@ const basicURLParser = (
         if (cp == 0x3f) {
           url._path = buffer
           url._query = ''
+          buffer = ''
           state = S.query
         } else if (cp == 0x23) {
           url._path = buffer
           url._fragment = ''
+          buffer = ''
           state = S.fragment
         } else if (cp == 0x20) {
           const nxt = cps.slice(pointer + 1).join('')
@@ -1028,13 +1331,29 @@ const basicURLParser = (
 
   // Inherit host/username/password/port (and opaque path) from base when the
   // authority was elided, per WHATWG "If url's host is null" step.
-  if (url._host.$kind == HK.none && base != null && base._host.$kind != HK.none) {
+  // For special (host-based) relative references whose host is absent,
+  // inherit the base's host/credentials/port. Non-special (opaque-path)
+  // URLs must NOT inherit the base host.
+  if (
+    url._host.$kind == HK.none &&
+    base != null &&
+    base._host.$kind != HK.none &&
+    isSpecial(url._scheme)
+  ) {
     url._username = base._username
     url._password = base._password
     url._host = base._host
     url._port = base._port
-    if (!nativeArrayIsArray(url._path) && base._path !== '') url._path = base._path
   }
+
+  // A special scheme (other than file) must have a non-null host.
+  if (
+    stateOverride == null &&
+    isSpecial(url._scheme) &&
+    url._scheme != 'file' &&
+    url._host.$kind == HK.none
+  )
+    return
 
   return url
 }
@@ -1050,8 +1369,9 @@ const serializePath = (url: URLRecord): string => {
 const serializeOrigin = (rec: URLRecord): string | null | undefined => {
   switch (rec._scheme) {
     case 'blob': {
-      if (rec._host.$kind != HK.none) {
-        const inner = basicURLParser(serializePath(rec))
+      // A blob URL's origin is derived from its inner (opaque-path) URL.
+      if (!nativeArrayIsArray(rec._path)) {
+        const inner = basicURLParser(rec._path)
         if (
           inner != null &&
           (inner._scheme == 'http' || inner._scheme == 'https' || inner._scheme == 'file')
@@ -1066,7 +1386,7 @@ const serializeOrigin = (rec: URLRecord): string | null | undefined => {
     case 'https':
     case 'ws':
     case 'wss':
-      return `${rec._scheme}://${serializeHost(rec._host)}${rec._port != null ? `:${rec._port}` : ''}`
+      return `${rec._scheme}://${serializeHost(rec._host, rec._scheme)}${rec._port != null ? `:${rec._port}` : ''}`
     case 'file':
       return 'file://'
   }
@@ -1266,7 +1586,7 @@ export class URL {
         if (rec._password != '') out += `:${rec._password}`
         out += '@'
       }
-      out += serializeHost(rec._host)
+      out += serializeHost(rec._host, rec._scheme)
       if (rec._port != null) out += `:${rec._port}`
     }
     // if host null, not opaque, path size>1 and path[0]=='' => append "/."
@@ -1320,8 +1640,8 @@ export class URL {
 
   get host(): string {
     if (this._record._host.$kind == HK.none) return ''
-    if (this._record._port == null) return serializeHost(this._record._host)
-    return `${serializeHost(this._record._host)}:${this._record._port}`
+    if (this._record._port == null) return serializeHost(this._record._host, this._record._scheme)
+    return `${serializeHost(this._record._host, this._record._scheme)}:${this._record._port}`
   }
   set host(v: string) {
     if (!nativeArrayIsArray(this._record._path)) return // opaque path
@@ -1330,7 +1650,7 @@ export class URL {
 
   get hostname(): string {
     if (this._record._host.$kind == HK.none) return ''
-    return serializeHost(this._record._host)
+    return serializeHost(this._record._host, this._record._scheme)
   }
   set hostname(v: string) {
     if (!nativeArrayIsArray(this._record._path)) return // opaque path
@@ -1368,9 +1688,13 @@ export class URL {
       return
     }
     const input = v[0] == '?' ? v.slice(1) : v
-    this._record._query = ''
-    basicURLParser(input, null, this._record, S.query)
-    ;(this._urlSearchParams as any as _URLSearchParams)._list = parseFormString(input)
+    // WHATWG: set the search by UTF-8 percent-encoding the value with the
+    // (special-)query set. Tabs/newlines are stripped, and `#` is encoded
+    // rather than starting a fragment.
+    const cleaned = input.replace(/[\t\n\r]/g, '')
+    const set = isSpecial(this._record._scheme) ? inSQuery : inQuery
+    this._record._query = utf8Pct(cleaned, set)
+    ;(this._urlSearchParams as any as _URLSearchParams)._list = parseFormString(this._record._query)
   }
 
   get searchParams(): URLSearchParams {

@@ -42,3 +42,6 @@ __screenshots__/
 
 test-results/
 playwright-report/
+
+# WPT downloaded test resources (fetched via pnpm fetch:wpt)
+tests/wpt-resources/
