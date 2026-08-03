@@ -1,13 +1,11 @@
 import { writeFile, mkdir } from 'node:fs/promises'
-import { resolve, dirname } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { resolve } from 'node:path'
 
 // Pin a specific WPT commit to avoid version drift.
 // To upgrade test data, update this sha and re-run `pnpm fetch:wpt`.
 const WPT_REF = 'master'
 const BASE = `https://raw.githubusercontent.com/web-platform-tests/wpt/${WPT_REF}/url/resources`
-const __dirname = dirname(fileURLToPath(import.meta.url))
-const OUT_DIR = resolve(__dirname, '../tests/wpt-resources')
+const OUT_DIR = resolve(import.meta.dirname, '../tests/wpt-resources')
 
 const files = ['urltestdata.json', 'setters_tests.json', 'percent-encoding.json', 'toascii.json']
 
